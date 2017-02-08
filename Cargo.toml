@@ -1,0 +1,8 @@
+[package]
+name = "wminspect"
+version = "0.1.0"
+authors = ["Sian Cao <yinshuiboy@gmail.com>"]
+
+[dependencies]
+#x11 = "2.12.1"
+xcb = "0.7.6"
