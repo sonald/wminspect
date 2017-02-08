@@ -6,3 +6,4 @@ authors = ["Sian Cao <yinshuiboy@gmail.com>"]
 [dependencies]
 #x11 = "2.12.1"
 xcb = "0.7.6"
+getopts = "*"
