@@ -3,6 +3,10 @@ name = "wminspect"
 version = "0.1.0"
 authors = ["Sian Cao <yinshuiboy@gmail.com>"]
 
+#[target.x86_64-apple-darwin.xcb]
+#rustc-link-search = ["/opt/X11/lib"]
+#rustc-link-lib = ["xcb"]
+
 [dependencies]
 #x11 = "2.12.1"
 xcb = "0.7.6"

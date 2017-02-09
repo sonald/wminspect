@@ -61,36 +61,7 @@ fn usage(program: &String, opts: &getopts::Options)
     println!("{}", opts.usage(&brief));
 }
 
-pub fn main() {
-    let args = std::env::args().collect::<Vec<String>>();
-    let program = args[0].clone();
-
-    let mut opts = getopts::Options::new();
-    opts.optflag("v", "only-mapped", "show only mapped windows");
-	opts.optflag("c", "colored", "output info with color");
-	opts.optflag("m", "monitor", "run in monitor mode");
-	//opts.optflag("f", "filter", "filter rule");
-	opts.optflag("o", "omit-hidden", "omit hidden windows");
-	opts.optflag("h", "help", "show this help");
-
-    let args = match opts.parse(&args) {
-        Ok(m) => m,
-        Err(_) => { usage(&program, &opts); return; },
-    };
-
-    if args.opt_present("h") {
-        usage(&program, &opts);
-        return;
-    }
-
-    let (c, _) = xcb::Connection::connect(None).unwrap();
-    let screen = c.get_setup().roots().next().unwrap();
-
-    let res = match xcb::query_tree(&c, screen.root()).get_reply() {
-        Ok(result) => result,
-        Err(_) => return,
-    };
-
+fn query_windows(c: &xcb::Connection, res: &xcb::QueryTreeReply) -> Vec<Window> {
     let net_wm_name_atom = xcb::intern_atom(&c, false, "_NET_WM_NAME").get_reply().unwrap();
     let utf8_string_atom = xcb::intern_atom(&c, false, "UTF8_STRING").get_reply().unwrap();
 
@@ -101,10 +72,8 @@ pub fn main() {
         qs.push(XcbRequest::GP(xcb::get_property(&c, false, *w, net_wm_name_atom.atom(),
                                                   utf8_string_atom.atom(), 0, std::u32::MAX)));
         qs.push(XcbRequest::GP(xcb::get_property(&c, false, *w, xcb::xproto::ATOM_WM_NAME, 
-                                                  utf8_string_atom.atom(), 0, std::u32::MAX)));
+                                                  xcb::xproto::ATOM_STRING, 0, std::u32::MAX)));
     }
-
-    let mut windows = Vec::with_capacity(res.children_len() as usize);
 
     macro_rules! apply_reply {
         ($win:ident $cookie:ident $reply:ident $e:expr) => (
@@ -114,6 +83,7 @@ pub fn main() {
             })
     }
 
+    let mut windows = Vec::with_capacity(res.children_len() as usize);
     let window_ids = res.children();
     for (i, query) in qs.into_iter().enumerate() {
         let idx = i / 4;
@@ -161,12 +131,81 @@ pub fn main() {
 
     }
 
+    return windows;
+}
 
-    let target_windows = windows.into_iter().filter(|ref w| w.valid && w.attrs.map_state == MapState::Viewable).collect::<Vec<_>>();
+pub fn main() {
+    let args = std::env::args().collect::<Vec<String>>();
+    let program = args[0].clone();
 
-    for (i, w) in target_windows.into_iter().enumerate() {
-        println!("{}: {}", i, w);
+    let mut opts = getopts::Options::new();
+    opts.optflag("v", "only-mapped", "show only mapped windows");
+	opts.optflag("c", "colored", "output info with color");
+	opts.optflag("m", "monitor", "run in monitor mode");
+	//opts.optflag("f", "filter", "filter rule");
+	opts.optflag("o", "omit-hidden", "omit hidden windows");
+	opts.optflag("h", "help", "show this help");
+
+    let args = match opts.parse(&args) {
+        Ok(m) => m,
+        Err(_) => { usage(&program, &opts); return; },
+    };
+
+    if args.opt_present("h") {
+        usage(&program, &opts);
+        return;
+    }
+
+    let (c, _) = xcb::Connection::connect(None).unwrap();
+    let screen = c.get_setup().roots().next().unwrap();
+
+    let res = match xcb::query_tree(&c, screen.root()).get_reply() {
+        Ok(result) => result,
+        Err(_) => return,
+    };
+
+    let windows = query_windows(&c, &res);
+
+
+    let mut target_windows = windows;
+    
+    macro_rules! do_filter {
+        ($windows:ident, $op:ident, $rule:expr) => (
+            $windows = $windows.into_iter(). $op ( $rule ) .collect::<Vec<_>>();
+        )
+    }
+
+    if args.opt_present("o") || args.opt_present("v") {
+        do_filter!(target_windows, skip_while, |ref w| {
+            !w.name.contains("guard window") || !w.attrs.override_redirect
+        });
+    }
+
+    if args.opt_present("v") {
+        do_filter!(target_windows, filter, |w: &Window| { w.attrs.map_state == MapState::Viewable });
+    }
+
+    if args.opt_present("o") {
+        do_filter!(target_windows, filter, |ref w| {
+            w.geom.x < screen.width_in_pixels() as i32 && w.geom.y < screen.height_in_pixels() as i32 &&
+                w.geom.width + w.geom.x > 0 && w.geom.height + w.geom.y > 0
+        });
+    }
+
+    if args.opt_present("m") {
+        monitor(&target_windows);
+    } else {
+        dump_windows(&target_windows);
     }
 }
 
+
+fn monitor(windows: &Vec<Window>) {
+}
+
+fn dump_windows(windows: &Vec<Window>) {
+    for (i, w) in windows.into_iter().enumerate() {
+        println!("{}: {}", i, w);
+    }
+}
 
