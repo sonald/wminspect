@@ -1,8 +1,10 @@
 extern crate xcb;
 extern crate getopts;
+extern crate colored;
 
-use std::io::Write;
+use colored::*;
 use std::fmt::*;
+use std::env;
 
 #[derive(Debug, Clone, Copy)]
 struct Geometry<T> where T: Copy {
@@ -44,8 +46,20 @@ struct Window {
 
 impl Display for Window {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "0x{:x}({}) {}x{}+{}+{}", self.id, self.name,
-            self.geom.width, self.geom.height, self.geom.x, self.geom.y)
+        let geom_str = format!("{}x{}+{}+{}", self.geom.width, self.geom.height,
+           self.geom.x, self.geom.y).red();
+        let id = format!("0x{:x}", self.id).blue();
+        let or = format!("{}", if self.attrs.override_redirect {
+            "OR"
+        } else {
+            ""
+        }).green();
+        let state = format!("{}", match self.attrs.map_state {
+            MapState::Unmapped => "Unmapped",
+            MapState::Unviewable => "Unviewable",
+            MapState::Viewable => "Viewable"
+        }).cyan();
+        write!(f, "{}({}) {} {} {}", id, self.name.cyan(), geom_str, or, state)
     }
 }
 
@@ -176,36 +190,69 @@ pub fn main() {
     }
 
     if args.opt_present("o") || args.opt_present("v") {
+        let mut has_guard_window = false;
+        for w in &target_windows {
+            if w.name.contains("guard window") && w.attrs.override_redirect {
+                has_guard_window = true;
+                break;
+            }
+        };
+
         do_filter!(target_windows, skip_while, |ref w| {
-            !w.name.contains("guard window") || !w.attrs.override_redirect
+            if has_guard_window {
+                !w.name.contains("guard window") || !w.attrs.override_redirect
+            } else {
+                false
+            }
         });
-    }
 
-    if args.opt_present("v") {
-        do_filter!(target_windows, filter, |w: &Window| { w.attrs.map_state == MapState::Viewable });
-    }
+        if args.opt_present("v") {
+            do_filter!(target_windows, filter, |w: &Window| { w.attrs.map_state == MapState::Viewable });
+        }
 
-    if args.opt_present("o") {
-        do_filter!(target_windows, filter, |ref w| {
-            w.geom.x < screen.width_in_pixels() as i32 && w.geom.y < screen.height_in_pixels() as i32 &&
-                w.geom.width + w.geom.x > 0 && w.geom.height + w.geom.y > 0
-        });
+        if args.opt_present("o") {
+            do_filter!(target_windows, filter, |ref w| {
+                w.geom.x < screen.width_in_pixels() as i32 && w.geom.y < screen.height_in_pixels() as i32 &&
+                    w.geom.width + w.geom.x > 0 && w.geom.height + w.geom.y > 0
+            });
+        }
     }
 
     if args.opt_present("m") {
         monitor(&target_windows);
     } else {
-        dump_windows(&target_windows);
+        dump_windows(&target_windows, args.opt_present("c"));
     }
 }
 
 
 fn monitor(windows: &Vec<Window>) {
 }
+fn win2str(w: &Window, colored: bool) -> String {
+    let geom_str = format!("{}x{}+{}+{}", w.geom.width, w.geom.height,
+                           w.geom.x, w.geom.y).red();
+    let id = format!("0x{:x}", w.id).blue();
+    let or = format!("{}", if w.attrs.override_redirect {
+        "OR"
+    } else {
+        ""
+    }).green();
+    let state = format!("{}", match w.attrs.map_state {
+        MapState::Unmapped => "Unmapped",
+        MapState::Unviewable => "Unviewable",
+        MapState::Viewable => "Viewable"
+    }).cyan();
 
-fn dump_windows(windows: &Vec<Window>) {
+    if colored {
+        format!("{}({}) {} {} {}", id, w.name.cyan(), geom_str, or, state)
+    } else {
+        format!("{}({}) {} {} {}", id.normal(), w.name, geom_str.normal(), or.normal(), state.normal())
+    }
+}
+
+fn dump_windows(windows: &Vec<Window>, colored: bool) {
     for (i, w) in windows.into_iter().enumerate() {
-        println!("{}: {}", i, w);
+        println!("{}: {}", i, win2str(w, colored));
     }
 }
 
