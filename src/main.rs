@@ -267,6 +267,7 @@ pub fn main() {
 	//opts.optflag("f", "filter", "filter rule");
 	opts.optflag("o", "omit-hidden", "omit hidden windows");
 	opts.optflag("h", "help", "show this help");
+	opts.optflag("n", "num", "show event sequence count");
 
     let args = match opts.parse(&args) {
         Ok(m) => m,
@@ -297,6 +298,8 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
     c.flush();
 
     let mut windows = collect_windows(c, args);
+    let mut last_configure_xid: xcb::Window = xcb::WINDOW_NONE;
+
     dump_windows(&windows, args);
 
     loop {
@@ -315,29 +318,35 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
                 xcb::xproto::DESTROY_NOTIFY => {
                     let dne = xcb::cast_event::<xcb::DestroyNotifyEvent>(&ev);
 
-                    println!("destroy 0x{:x}", dne.window());
-                    do_filter!(windows, filter, |ref w| w.id != dne.window());
-                    dump_windows(&windows, args);
+                    let do_recollect = windows.as_slice().iter().any(|ref w| w.id == dne.window());
+                    if do_recollect {
+                        println!("destroy 0x{:x}", dne.window());
+                        windows.retain(|ref w| w.id != dne.window());
+                        dump_windows(&windows, args);
+                    }
                 },
                 xcb::xproto::REPARENT_NOTIFY => {
                     let rne = xcb::cast_event::<xcb::ReparentNotifyEvent>(&ev);
-                    println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
 
-                    if rne.parent() != screen.root() {
-                        do_filter!(windows, filter, |ref w| w.id != rne.window());
+                    let do_recollect = windows.as_slice().iter().any(|ref w| w.id == rne.window());
+                    if do_recollect && rne.parent() != screen.root() {
+                        println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
+                        windows.retain(|ref w| w.id != rne.window());
+                        dump_windows(&windows, args);
                     }
-                    dump_windows(&windows, args);
                 },
 
                 xproto::CONFIGURE_NOTIFY => {
                     let cne = xcb::cast_event::<xcb::ConfigureNotifyEvent>(&ev);
 
-                    //TODO: squeeze consective configurenotify for the same window
                     let do_recollect = windows.as_slice().iter().any(|ref w| w.id == cne.window());
                     if do_recollect {
                         println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
-                        windows = collect_windows(c, args);
-                        dump_windows(&windows, args);
+                        if last_configure_xid != cne.window() {
+                            windows = collect_windows(c, args);
+                            dump_windows(&windows, args);
+                            last_configure_xid = cne.window();
+                        }
                     }
                 },
 
