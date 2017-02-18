@@ -1,3 +1,5 @@
+#![feature(core_intrinsics)]
+
 extern crate xcb;
 extern crate getopts;
 extern crate colored;
@@ -8,6 +10,10 @@ use std::env;
 use std::time;
 use std::thread;
 use xcb::xproto;
+
+fn print_type_of<T>(_: &T) {
+    println!("{}", unsafe { std::intrinsics::type_name::<T>() });
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Geometry<T> where T: Copy {
@@ -302,6 +308,8 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
 
     dump_windows(&windows, args);
 
+    let event_related = |ev_win: xcb::Window, windows: &Vec<Window>| windows.iter().any(|ref w| w.id == ev_win);
+
     loop {
         if let Some(ev) = c.poll_for_event() {
             match ev.response_type() & !0x80 {
@@ -318,8 +326,7 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
                 xcb::xproto::DESTROY_NOTIFY => {
                     let dne = xcb::cast_event::<xcb::DestroyNotifyEvent>(&ev);
 
-                    let do_recollect = windows.as_slice().iter().any(|ref w| w.id == dne.window());
-                    if do_recollect {
+                    if event_related(dne.window(), &windows) {
                         println!("destroy 0x{:x}", dne.window());
                         windows.retain(|ref w| w.id != dne.window());
                         dump_windows(&windows, args);
@@ -328,8 +335,7 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
                 xcb::xproto::REPARENT_NOTIFY => {
                     let rne = xcb::cast_event::<xcb::ReparentNotifyEvent>(&ev);
 
-                    let do_recollect = windows.as_slice().iter().any(|ref w| w.id == rne.window());
-                    if do_recollect && rne.parent() != screen.root() {
+                    if event_related(rne.window(), &windows) && rne.parent() != screen.root() {
                         println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
                         windows.retain(|ref w| w.id != rne.window());
                         dump_windows(&windows, args);
@@ -339,8 +345,7 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
                 xproto::CONFIGURE_NOTIFY => {
                     let cne = xcb::cast_event::<xcb::ConfigureNotifyEvent>(&ev);
 
-                    let do_recollect = windows.as_slice().iter().any(|ref w| w.id == cne.window());
-                    if do_recollect {
+                    if event_related(cne.window(), &windows) {
                         println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
                         if last_configure_xid != cne.window() {
                             windows = collect_windows(c, args);
@@ -350,6 +355,33 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
                     }
                 },
 
+                xproto::MAP_NOTIFY => {
+                    let mn = xcb::cast_event::<xcb::MapNotifyEvent>(&ev);
+
+                    if event_related(mn.window(), &windows) {
+                        {
+                            let mut win = windows.iter_mut().find(|ref mut w| w.id == mn.window()).unwrap();
+                            win.attrs.map_state = MapState::Viewable;
+                        }
+                        println!("map 0x{:x}", mn.window());
+                        dump_windows(&windows, args);
+                    }
+                },
+
+                xproto::UNMAP_NOTIFY => {
+                    let un = xcb::cast_event::<xcb::UnmapNotifyEvent>(&ev);
+
+                    if event_related(un.window(), &windows) {
+                        {
+                            let mut win = windows.iter_mut().find(|ref w| w.id == un.window()).unwrap();
+                            win.attrs.map_state = MapState::Unmapped;
+                        }
+                        println!("unmap 0x{:x}", un.window());
+                        dump_windows(&windows, args);
+                    }
+                },
+
+
                 _ => {
                 },
             } 
@@ -358,6 +390,7 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
         thread::sleep(time::Duration::from_millis(50));
     }
 }
+
 
 fn win2str(w: &Window, colored: bool) -> String {
     let geom_str = format!("{}x{}+{}+{}", w.geom.width, w.geom.height,
@@ -383,7 +416,7 @@ fn win2str(w: &Window, colored: bool) -> String {
 
 fn dump_windows(windows: &Vec<Window>, args: &getopts::Matches) {
     let colored = args.opt_present("c");
-    for (i, w) in windows.into_iter().enumerate() {
+    for (i, w) in windows.iter().enumerate() {
         println!("{}: {}", i, win2str(w, colored));
     }
 }
