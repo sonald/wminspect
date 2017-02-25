@@ -322,7 +322,7 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
     c.flush();
 
     let mut windows = Arc::new(Mutex::new(collect_windows(&c, args)));
-    let mut last_configure_xid: xcb::Window = xcb::WINDOW_NONE;
+    let last_configure_xid = Arc::new(Mutex::new(xcb::WINDOW_NONE));
     let need_configure = Arc::new(Mutex::new(false));
     let event_related = |ev_win: xcb::Window, windows: &Vec<Window>| windows.iter().any(|ref w| w.id == ev_win);
     let (tx, rx) = mpsc::channel::<Message>();
@@ -334,15 +334,16 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
         {
             let windows = windows.clone();
             let (c, need_configure) = (c.clone(), need_configure.clone());
+            let last_configure_xid = last_configure_xid.clone();
 
             scope.spawn(move || {
                 print_type_of(&need_configure);
 
-                let idle_configure_timeout = time::Duration::from_millis(1000);
+                let idle_configure_timeout = time::Duration::from_millis(200);
                 let mut last_checked_time = time::Instant::now();
 
                 loop {
-                    match rx.recv_timeout(time::Duration::from_millis(50)) {
+                    match rx.recv_timeout(time::Duration::from_millis(10)) {
                         Ok(Message::TimeoutEvent) => { 
                             wm_debug!("recv timeout"); 
                             last_checked_time = time::Instant::now();
@@ -357,6 +358,7 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
 
                     if *need_configure.lock().unwrap() && last_checked_time.elapsed() > idle_configure_timeout {
                         wm_debug!("timedout, reload");
+                        println!("delayed configure 0x{:x} ", *last_configure_xid.lock().unwrap());
                         *windows.lock().unwrap() = collect_windows(&c, args);
                         dump_windows(&windows.lock().unwrap(), args);
                         *need_configure.lock().unwrap() = false;
@@ -404,11 +406,11 @@ fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
                         let cne = xcb::cast_event::<xcb::ConfigureNotifyEvent>(&ev);
 
                         if event_related(cne.window(), &windows.lock().unwrap()) {
-                            println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
-                            if last_configure_xid != cne.window() {
+                            if *last_configure_xid.lock().unwrap() != cne.window() {
+                                println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
                                 *windows.lock().unwrap() = collect_windows(&c, args);
                                 dump_windows(&windows.lock().unwrap(), args);
-                                last_configure_xid = cne.window();
+                                *last_configure_xid.lock().unwrap() = cne.window();
                                 tx.send(Message::Reset).unwrap();
 
                             } else {
