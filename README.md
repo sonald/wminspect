@@ -6,3 +6,9 @@ on mac os, install xquartz, and then
     cargo build --release
 ```
 
+## TODO
+
+- [ ] do idle update
+- [ ] use DSL to specify filter rule
+- [ ] highlight diffs across events
+

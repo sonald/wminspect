@@ -3,6 +3,8 @@
 extern crate xcb;
 extern crate getopts;
 extern crate colored;
+extern crate timer;
+extern crate crossbeam;
 
 use colored::*;
 use std::fmt::*;
@@ -10,9 +12,18 @@ use std::env;
 use std::time;
 use std::thread;
 use xcb::xproto;
+use std::sync::*;
+
+macro_rules! wm_debug {
+    ( $($a:tt)* ) => (
+        if cfg!(debug_assertions) {
+            println!{$($a)*}; 
+        })
+}
+
 
 fn print_type_of<T>(_: &T) {
-    println!("{}", unsafe { std::intrinsics::type_name::<T>() });
+    wm_debug!("{}", unsafe { std::intrinsics::type_name::<T>() });
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -263,7 +274,7 @@ fn collect_windows(c: &xcb::Connection, args: &getopts::Matches) -> Vec<Window> 
 }
 
 pub fn main() {
-    let args = std::env::args().collect::<Vec<String>>();
+    let args = env::args().collect::<Vec<String>>();
     let program = args[0].clone();
 
     let mut opts = getopts::Options::new();
@@ -296,99 +307,155 @@ pub fn main() {
     }
 }
 
+#[derive(Debug, Clone)]
+enum Message {
+    TimeoutEvent,
+    Reset,
+    Quit,
+}
 
 fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
+    let c = Arc::new(c);
     let ev_mask: u32 = xproto::EVENT_MASK_SUBSTRUCTURE_NOTIFY;
     xcb::xproto::change_window_attributes(&c, screen.root(), 
-                      &[(xcb::xproto::CW_EVENT_MASK, ev_mask)]);
+                                          &[(xcb::xproto::CW_EVENT_MASK, ev_mask)]);
     c.flush();
 
-    let mut windows = collect_windows(c, args);
+    let mut windows = Arc::new(Mutex::new(collect_windows(&c, args)));
     let mut last_configure_xid: xcb::Window = xcb::WINDOW_NONE;
-
-    dump_windows(&windows, args);
-
+    let need_configure = Arc::new(Mutex::new(false));
     let event_related = |ev_win: xcb::Window, windows: &Vec<Window>| windows.iter().any(|ref w| w.id == ev_win);
+    let (tx, rx) = mpsc::channel::<Message>();
 
-    loop {
-        if let Some(ev) = c.poll_for_event() {
-            match ev.response_type() & !0x80 {
-                xcb::xproto::CREATE_NOTIFY => {
-                    let cne = xcb::cast_event::<xcb::CreateNotifyEvent>(&ev);
-                    if cne.parent() != screen.root() {
-                        break;
+    dump_windows(&windows.lock().unwrap(), args);
+    print_type_of(&windows);
+
+    crossbeam::scope(|scope| {
+        {
+            let windows = windows.clone();
+            let (c, need_configure) = (c.clone(), need_configure.clone());
+
+            scope.spawn(move || {
+                print_type_of(&need_configure);
+
+                let idle_configure_timeout = time::Duration::from_millis(1000);
+                let mut last_checked_time = time::Instant::now();
+
+                loop {
+                    match rx.recv_timeout(time::Duration::from_millis(50)) {
+                        Ok(Message::TimeoutEvent) => { 
+                            wm_debug!("recv timeout"); 
+                            last_checked_time = time::Instant::now();
+                            *need_configure.lock().unwrap() = true;
+                        },
+                        Ok(Message::Reset) => { 
+                            *need_configure.lock().unwrap() = false;
+                        },
+                        Ok(Message::Quit) => { break; },
+                        _ =>  {}
                     }
-                    println!("create 0x{:x}, parent 0x{:x}", cne.window(), cne.parent());
 
-                    windows = collect_windows(c, args);
-                    dump_windows(&windows, args);
-                },
-                xcb::xproto::DESTROY_NOTIFY => {
-                    let dne = xcb::cast_event::<xcb::DestroyNotifyEvent>(&ev);
-
-                    if event_related(dne.window(), &windows) {
-                        println!("destroy 0x{:x}", dne.window());
-                        windows.retain(|ref w| w.id != dne.window());
-                        dump_windows(&windows, args);
+                    if *need_configure.lock().unwrap() && last_checked_time.elapsed() > idle_configure_timeout {
+                        wm_debug!("timedout, reload");
+                        *windows.lock().unwrap() = collect_windows(&c, args);
+                        dump_windows(&windows.lock().unwrap(), args);
+                        *need_configure.lock().unwrap() = false;
                     }
-                },
-                xcb::xproto::REPARENT_NOTIFY => {
-                    let rne = xcb::cast_event::<xcb::ReparentNotifyEvent>(&ev);
+                }
 
-                    if event_related(rne.window(), &windows) && rne.parent() != screen.root() {
-                        println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
-                        windows.retain(|ref w| w.id != rne.window());
-                        dump_windows(&windows, args);
-                    }
-                },
+            });
+        }
 
-                xproto::CONFIGURE_NOTIFY => {
-                    let cne = xcb::cast_event::<xcb::ConfigureNotifyEvent>(&ev);
 
-                    if event_related(cne.window(), &windows) {
-                        println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
-                        if last_configure_xid != cne.window() {
-                            windows = collect_windows(c, args);
-                            dump_windows(&windows, args);
-                            last_configure_xid = cne.window();
+        loop {
+            if let Some(ev) = c.poll_for_event() {
+                match ev.response_type() & !0x80 {
+                    xcb::xproto::CREATE_NOTIFY => {
+                        let cne = xcb::cast_event::<xcb::CreateNotifyEvent>(&ev);
+                        if cne.parent() != screen.root() {
+                            break;
                         }
-                    }
-                },
+                        println!("create 0x{:x}, parent 0x{:x}", cne.window(), cne.parent());
 
-                xproto::MAP_NOTIFY => {
-                    let mn = xcb::cast_event::<xcb::MapNotifyEvent>(&ev);
+                        // assumes that window will be at top when created
+                        windows.lock().unwrap().push(query_window(&c, cne.window()));
+                        dump_windows(&windows.lock().unwrap(), args);
+                    },
+                    xcb::xproto::DESTROY_NOTIFY => {
+                        let dne = xcb::cast_event::<xcb::DestroyNotifyEvent>(&ev);
 
-                    if event_related(mn.window(), &windows) {
-                        {
-                            let mut win = windows.iter_mut().find(|ref mut w| w.id == mn.window()).unwrap();
-                            win.attrs.map_state = MapState::Viewable;
+                        if event_related(dne.window(), &windows.lock().unwrap()) {
+                            println!("destroy 0x{:x}", dne.window());
+                            windows.lock().unwrap().retain(|ref w| w.id != dne.window());
+                            dump_windows(&windows.lock().unwrap(), args);
                         }
-                        println!("map 0x{:x}", mn.window());
-                        dump_windows(&windows, args);
-                    }
-                },
+                    },
+                    xcb::xproto::REPARENT_NOTIFY => {
+                        let rne = xcb::cast_event::<xcb::ReparentNotifyEvent>(&ev);
 
-                xproto::UNMAP_NOTIFY => {
-                    let un = xcb::cast_event::<xcb::UnmapNotifyEvent>(&ev);
-
-                    if event_related(un.window(), &windows) {
-                        {
-                            let mut win = windows.iter_mut().find(|ref w| w.id == un.window()).unwrap();
-                            win.attrs.map_state = MapState::Unmapped;
+                        if event_related(rne.window(), &windows.lock().unwrap()) && rne.parent() != screen.root() {
+                            println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
+                            windows.lock().unwrap().retain(|ref w| w.id != rne.window());
+                            dump_windows(&windows.lock().unwrap(), args);
                         }
-                        println!("unmap 0x{:x}", un.window());
-                        dump_windows(&windows, args);
-                    }
-                },
+                    },
+
+                    xproto::CONFIGURE_NOTIFY => {
+                        let cne = xcb::cast_event::<xcb::ConfigureNotifyEvent>(&ev);
+
+                        if event_related(cne.window(), &windows.lock().unwrap()) {
+                            println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
+                            if last_configure_xid != cne.window() {
+                                *windows.lock().unwrap() = collect_windows(&c, args);
+                                dump_windows(&windows.lock().unwrap(), args);
+                                last_configure_xid = cne.window();
+                                tx.send(Message::Reset).unwrap();
+
+                            } else {
+                                tx.send(Message::TimeoutEvent).unwrap();
+                            }
+                        }
+                    },
+
+                    xproto::MAP_NOTIFY => {
+                        let mn = xcb::cast_event::<xcb::MapNotifyEvent>(&ev);
+
+                        if event_related(mn.window(), &windows.lock().unwrap()) {
+                            {
+                                let mut locked = windows.lock().unwrap();
+                                let mut win = locked.iter_mut().find(|ref mut w| w.id == mn.window()).unwrap();
+                                win.attrs.map_state = MapState::Viewable;
+                            }
+                            println!("map 0x{:x}", mn.window());
+                            dump_windows(&windows.lock().unwrap(), args);
+                        }
+                    },
+
+                    xproto::UNMAP_NOTIFY => {
+                        let un = xcb::cast_event::<xcb::UnmapNotifyEvent>(&ev);
+
+                        if event_related(un.window(), &windows.lock().unwrap()) {
+                            {
+                                let mut locked = windows.lock().unwrap();
+                                let mut win = locked.iter_mut().find(|ref w| w.id == un.window()).unwrap();
+                                win.attrs.map_state = MapState::Unmapped;
+                            }
+                            println!("unmap 0x{:x}", un.window());
+                            dump_windows(&windows.lock().unwrap(), args);
+                        }
+                    },
 
 
-                _ => {
-                },
-            } 
-        };
+                    _ => {
+                    },
+                } 
+            };
 
-        thread::sleep(time::Duration::from_millis(50));
-    }
+            thread::sleep(time::Duration::from_millis(50));
+        }
+
+        tx.send(Message::Quit);
+    });
 }
 
 
