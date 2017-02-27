@@ -27,6 +27,7 @@ pub fn main() {
 	opts.optflag("o", "omit-hidden", "omit hidden windows");
 	opts.optflag("h", "help", "show this help");
 	opts.optflag("n", "num", "show event sequence count");
+	opts.optflag("d", "diff", "highlight diffs between events");
 
     let args = match opts.parse(&args) {
         Ok(m) => m,
