@@ -233,7 +233,43 @@ macro_rules! do_filter {
         )
 }
 
-pub fn collect_windows(c: &xcb::Connection, args: &getopts::Matches) -> Vec<Window> {
+pub fn collect_windows(c: &xcb::Connection, filter: &Filter) -> Vec<Window> {
+    let screen = c.get_setup().roots().next().unwrap();
+    let res = match xcb::query_tree(&c, screen.root()).get_reply() {
+        Ok(result) => result,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut target_windows = query_windows(&c, &res);
+
+    if filter.mapped_only() || filter.omit_hidden() {
+        let has_guard_window = target_windows.as_slice().iter()
+            .any(|ref w| w.name.contains("guard window") && w.attrs.override_redirect);
+
+        do_filter!(target_windows, skip_while, |ref w| {
+            if has_guard_window {
+                !w.name.contains("guard window") || !w.attrs.override_redirect
+            } else {
+                false
+            }
+        });
+
+        if filter.mapped_only() {
+            do_filter!(target_windows, filter, |w: &Window| { w.attrs.map_state == MapState::Viewable });
+        }
+
+        if filter.omit_hidden() {
+            do_filter!(target_windows, filter, |ref w| {
+                w.geom.x < screen.width_in_pixels() as i32 && w.geom.y < screen.height_in_pixels() as i32 &&
+                    w.geom.width + w.geom.x > 0 && w.geom.height + w.geom.y > 0
+            });
+        }
+    }
+
+    return target_windows;
+}
+
+pub fn collect_windows2(c: &xcb::Connection, args: &getopts::Matches) -> Vec<Window> {
     let screen = c.get_setup().roots().next().unwrap();
     let res = match xcb::query_tree(&c, screen.root()).get_reply() {
         Ok(result) => result,
@@ -276,20 +312,22 @@ pub enum Message {
     Quit,
 }
 
-pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matches) {
+use std::io::Write;
+
+pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
     let c = Arc::new(c);
+
     let ev_mask: u32 = xproto::EVENT_MASK_SUBSTRUCTURE_NOTIFY;
     xcb::xproto::change_window_attributes(&c, screen.root(), 
                                           &[(xcb::xproto::CW_EVENT_MASK, ev_mask)]);
     c.flush();
 
-    let mut windows = Arc::new(Mutex::new(collect_windows(&c, args)));
+    let mut windows = Arc::new(Mutex::new(collect_windows(&c, filter)));
     let last_configure_xid = Arc::new(Mutex::new(xcb::WINDOW_NONE));
     let need_configure = Arc::new(Mutex::new(false));
-    let event_related = |ev_win: xcb::Window, windows: &Vec<Window>| windows.iter().any(|ref w| w.id == ev_win);
     let (tx, rx) = mpsc::channel::<Message>();
 
-    dump_windows(&windows.lock().unwrap(), args);
+    dump_windows(&windows.lock().unwrap(), filter);
     print_type_of(&windows);
 
     crossbeam::scope(|scope| {
@@ -297,9 +335,11 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matche
             let windows = windows.clone();
             let (c, need_configure) = (c.clone(), need_configure.clone());
             let last_configure_xid = last_configure_xid.clone();
+            let event_related = |ev_win: xcb::Window, windows: &Vec<Window>| windows.iter().any(|ref w| w.id == ev_win);
 
             scope.spawn(move || {
                 print_type_of(&need_configure);
+                print_type_of(filter);
 
                 let idle_configure_timeout = time::Duration::from_millis(200);
                 let mut last_checked_time = time::Instant::now();
@@ -319,10 +359,13 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matche
                     }
 
                     if *need_configure.lock().unwrap() && last_checked_time.elapsed() > idle_configure_timeout {
+                        if event_related(*last_configure_xid.lock().unwrap(), &windows.lock().unwrap()) {
+                        }
+
                         wm_debug!("timedout, reload");
                         println!("delayed configure 0x{:x} ", *last_configure_xid.lock().unwrap());
-                        *windows.lock().unwrap() = collect_windows(&c, args);
-                        dump_windows(&windows.lock().unwrap(), args);
+                        *windows.lock().unwrap() = collect_windows(&c, filter);
+                        dump_windows(&windows.lock().unwrap(), filter);
                         *need_configure.lock().unwrap() = false;
                     }
                 }
@@ -331,6 +374,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matche
         }
 
 
+        let event_related = |ev_win: xcb::Window, windows: &Vec<Window>| windows.iter().any(|ref w| w.id == ev_win);
         loop {
             if let Some(ev) = c.poll_for_event() {
                 match ev.response_type() & !0x80 {
@@ -343,7 +387,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matche
 
                         // assumes that window will be at top when created
                         windows.lock().unwrap().push(query_window(&c, cne.window()));
-                        dump_windows(&windows.lock().unwrap(), args);
+                        dump_windows(&windows.lock().unwrap(), filter);
                     },
                     xcb::xproto::DESTROY_NOTIFY => {
                         let dne = xcb::cast_event::<xcb::DestroyNotifyEvent>(&ev);
@@ -351,7 +395,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matche
                         if event_related(dne.window(), &windows.lock().unwrap()) {
                             println!("destroy 0x{:x}", dne.window());
                             windows.lock().unwrap().retain(|ref w| w.id != dne.window());
-                            dump_windows(&windows.lock().unwrap(), args);
+                            dump_windows(&windows.lock().unwrap(), filter);
                         }
                     },
                     xcb::xproto::REPARENT_NOTIFY => {
@@ -360,7 +404,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matche
                         if event_related(rne.window(), &windows.lock().unwrap()) && rne.parent() != screen.root() {
                             println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
                             windows.lock().unwrap().retain(|ref w| w.id != rne.window());
-                            dump_windows(&windows.lock().unwrap(), args);
+                            dump_windows(&windows.lock().unwrap(), filter);
                         }
                     },
 
@@ -370,8 +414,8 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matche
                         if event_related(cne.window(), &windows.lock().unwrap()) {
                             if *last_configure_xid.lock().unwrap() != cne.window() {
                                 println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
-                                *windows.lock().unwrap() = collect_windows(&c, args);
-                                dump_windows(&windows.lock().unwrap(), args);
+                                *windows.lock().unwrap() = collect_windows(&c, filter);
+                                dump_windows(&windows.lock().unwrap(), filter);
                                 *last_configure_xid.lock().unwrap() = cne.window();
                                 tx.send(Message::Reset).unwrap();
 
@@ -391,7 +435,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matche
                                 win.attrs.map_state = MapState::Viewable;
                             }
                             println!("map 0x{:x}", mn.window());
-                            dump_windows(&windows.lock().unwrap(), args);
+                            dump_windows(&windows.lock().unwrap(), filter);
                         }
                     },
 
@@ -405,7 +449,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, args: &getopts::Matche
                                 win.attrs.map_state = MapState::Unmapped;
                             }
                             println!("unmap 0x{:x}", un.window());
-                            dump_windows(&windows.lock().unwrap(), args);
+                            dump_windows(&windows.lock().unwrap(), filter);
                         }
                     },
 
@@ -445,10 +489,57 @@ fn win2str(w: &Window, colored: bool) -> String {
     }
 }
 
-pub fn dump_windows(windows: &Vec<Window>, args: &getopts::Matches) {
-    let colored = args.opt_present("c");
+pub fn dump_windows(windows: &Vec<Window>, filter: &Filter) {
+    let colored = filter.colorful();
     for (i, w) in windows.iter().enumerate() {
         println!("{}: {}", i, win2str(w, colored));
     }
+}
+
+#[derive(Debug, Clone)]
+enum Condition {
+    Colorful,
+    MappedOnly,
+    OmitHidden,
+}
+
+type FilterFunction = Box<Fn(&Window) -> bool + Send>;
+
+pub struct Filter{
+    options: Vec<Condition>,
+    applys: Vec<FilterFunction>
+}
+
+unsafe impl Sync for Filter {}
+
+macro_rules! build_fun {
+    ($getter:ident, $setter:ident, $cond:tt) => (
+        pub fn $getter(&self) -> bool {
+            self.options.as_slice().iter().any(|c| {
+                match *c {
+                    Condition::$cond => true,
+                    _ => false
+                }
+            })
+        }
+        
+        pub fn $setter(&mut self) {
+            self.options.push(Condition::$cond)
+        })
+}
+
+impl Filter {
+    build_fun!(mapped_only, set_mapped_only, MappedOnly);
+    build_fun!(colorful, set_colorful, Colorful);
+    build_fun!(omit_hidden, set_omit_hidden, OmitHidden);
+}
+
+/// rule: and(attr(map_state=Viewable), geom(x>2))
+pub fn parse_filter(rule: String) -> Filter {
+    let mut filter = Filter {options: Vec::new(), applys: Vec::new()};
+
+    //filter.applys.push(Box::new(move |w: &Window| w.attrs.map_state == MapState::Viewable));
+
+    filter
 }
 
