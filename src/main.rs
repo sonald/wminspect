@@ -25,6 +25,7 @@ pub fn main() {
 	opts.optflag("m", "monitor", "run in monitor mode");
     opts.optopt("f", "filter", "filter rule", "\"RULE EXPR\"");
 	opts.optflag("o", "omit-hidden", "omit hidden windows");
+	opts.optflag("s", "no-special", "ignore special windows");
 	opts.optflag("h", "help", "show this help");
 	opts.optflag("n", "num", "show event sequence count");
 	opts.optflag("d", "diff", "highlight diffs between events");
@@ -50,6 +51,7 @@ pub fn main() {
     if args.opt_present("v") { f.set_mapped_only(); }
     if args.opt_present("c") { f.set_colorful(); }
     if args.opt_present("o") { f.set_omit_hidden(); }
+    if args.opt_present("s") { f.set_no_special(); }
 
     if args.opt_present("m") {
         wm::monitor(&c, &screen, &f);

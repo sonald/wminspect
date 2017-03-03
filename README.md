@@ -11,18 +11,18 @@ use DSL for rule to filter windows and other stuff
 
 filtering windows
 ```
-or(attr(map_state=Viewable), geom(and(x>2, w>100)))
+any(attrs.map_state=Viewable, all(geom.x>2, geom.w>100))
 ```
 
 id wildcard matching
 ```
-and(id=0x10000??, attr(override_redirect=true))
+all(id=0x10000??, name="*mutter*", attrs.override_redirect=true)
 ```
 
 actions
 ```
-attr(map_state=Viewable): filter;
-not(attr(map_state=Viewable)): pin;
+attrs.map_state=Viewable: filter;
+not(attrs.map_state=Viewable): pin;
 ```
 
 ## TODO

@@ -1,4 +1,4 @@
-pub mod wm;
+#[macro_use] pub mod wm;
 pub mod filter;
 
 pub use self::wm::*;

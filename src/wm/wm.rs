@@ -12,6 +12,7 @@ use std::time;
 use std::thread;
 use xcb::xproto;
 use std::sync::*;
+use std::collections::HashSet;
 
 use super::filter::*;
 
@@ -32,10 +33,10 @@ fn print_type_of<T>(_: &T) {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Geometry<T> where T: Copy {
-    x: T,
-    y: T,
-    width: T,
-    height: T,
+    pub x: T,
+    pub y: T,
+    pub width: T,
+    pub height: T,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -55,16 +56,16 @@ impl Eq for MapState { }
 
 #[derive(Debug, Copy, Clone)]
 pub struct Attributes {
-    override_redirect: bool,
-    map_state: MapState,
+    pub override_redirect: bool,
+    pub map_state: MapState,
 }
 
 #[derive(Debug, Clone)]
 pub struct Window {
-    id: xcb::Window,
-    name: String,
-    attrs: Attributes,
-    geom: Geometry<i32>,
+    pub id: xcb::Window,
+    pub name: String,
+    pub attrs: Attributes,
+    pub geom: Geometry<i32>,
     valid: bool,
 }
 
@@ -268,40 +269,19 @@ pub fn collect_windows(c: &xcb::Connection, filter: &Filter) -> Vec<Window> {
         }
     }
 
-    return target_windows;
-}
+    if filter.no_special() {
+        let mut specials = HashSet::new();
+        specials.insert("mutter guard window");
+        specials.insert("deepin-metacity guard window");
+        specials.insert("mutter topleft corner window");
+        specials.insert("deepin-metacity topleft corner window");
+        do_filter!(target_windows, filter, |w: &Window| { specials.contains(w.name.as_str()) });
+    }
 
-pub fn collect_windows2(c: &xcb::Connection, args: &getopts::Matches) -> Vec<Window> {
-    let screen = c.get_setup().roots().next().unwrap();
-    let res = match xcb::query_tree(&c, screen.root()).get_reply() {
-        Ok(result) => result,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut target_windows = query_windows(&c, &res);
-
-    if args.opt_present("o") || args.opt_present("v") {
-        let has_guard_window = target_windows.as_slice().iter()
-            .any(|ref w| w.name.contains("guard window") && w.attrs.override_redirect);
-
-        do_filter!(target_windows, skip_while, |ref w| {
-            if has_guard_window {
-                !w.name.contains("guard window") || !w.attrs.override_redirect
-            } else {
-                false
-            }
-        });
-
-        if args.opt_present("v") {
-            do_filter!(target_windows, filter, |w: &Window| { w.attrs.map_state == MapState::Viewable });
-        }
-
-        if args.opt_present("o") {
-            do_filter!(target_windows, filter, |ref w| {
-                w.geom.x < screen.width_in_pixels() as i32 && w.geom.y < screen.height_in_pixels() as i32 &&
-                    w.geom.width + w.geom.x > 0 && w.geom.height + w.geom.y > 0
-            });
-        }
+    if filter.applys.len() > 0 {
+        // do filter, pin is support now not now
+        //do_filter!(target_windows, filter, *filter.applys[0]);
+        //target_windows = target_windows.into_iter().filter( *filter.applys[0] ) .collect::<Vec<_>>();
     }
 
     return target_windows;
@@ -339,6 +319,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
             let last_configure_xid = last_configure_xid.clone();
             let event_related = |ev_win: xcb::Window, windows: &Vec<Window>| windows.iter().any(|ref w| w.id == ev_win);
 
+            print_type_of(&event_related);
             scope.spawn(move || {
                 print_type_of(&need_configure);
                 print_type_of(filter);
