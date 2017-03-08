@@ -4,6 +4,8 @@ use super::wm::*;
 use std::fmt::Debug;
 use self::regex::Regex;
 use std::collections::HashSet;
+use std::str::Chars;
+use std::iter::Peekable;
 
 #[derive(Debug, Clone)]
 enum Condition {
@@ -13,11 +15,12 @@ enum Condition {
     NoSpecial,
 }
 
-type FilterFunction = Box<Fn(&Window) -> bool + Send>;
+type FilterFunction = Box<Fn(&Window) -> bool>;
 
 pub struct Filter {
     options: Vec<Condition>,
-    pub applys: Vec<FilterFunction>
+    pub applys: Vec<FilterFunction>,
+    pub pins: Vec<FilterFunction>
 }
 
 unsafe impl Sync for Filter {}
@@ -79,7 +82,11 @@ enum Op {
 }
 
 // marker
-trait Rule : Debug { }
+trait Rule : Debug { 
+    fn gen_closure(&self) -> FilterFunction {
+        Box::new(|ref w|true)
+    }
+}
 
 type BoxedRule = Box<Rule + Send>;
 
@@ -112,10 +119,182 @@ struct Not {
     rule: BoxedRule
 }
 
-impl Rule for FilterRule { }
-impl Rule for All { }
-impl Rule for Any { }
-impl Rule for Not { }
+fn wild_match(pat: &str, s: &str) -> bool {
+    fn mat_star(pat: &[char], mut i: usize, s: &[char], mut j: usize) -> bool {
+        while j <= s.len() {
+            if mat(pat, i+1, s, j) {
+                return true;
+            }
+            j += 1;
+        }
+
+        false
+    }
+
+    fn mat(pat: &[char], mut i: usize, s: &[char], mut j: usize) -> bool {
+        if pat.len() == i || s.len() == j {
+            return pat.len() == i && s.len() == j;
+        }
+
+        if pat[i] == '?' || pat[i] == s[j] {
+            mat(pat, i+1, s, j+1)
+        } else if pat[i] == '*' {
+            mat_star(pat, i, s, j) 
+        } else {
+            return false;
+        }
+    }
+
+    let res;
+    if is_wild_string(pat) {
+        res = mat(&pat.chars().collect::<Vec<_>>(), 0, &s.chars().collect::<Vec<_>>(), 0);
+    } else {
+        res = s.contains(pat);
+    }
+
+    //wm_debug!("match({}, {})={}", pat, s, res);
+    res
+}
+
+fn is_wild_string(pattern: &str) -> bool {
+    pattern.chars().any(|c| c == '?' || c == '*')
+}
+
+impl Rule for FilterRule {
+    fn gen_closure(&self) -> FilterFunction {
+        match (&self.pred, &self.op, &self.matcher) {
+            (&Predicate::Name, op, &Matcher::Wildcard(ref pat)) => {
+                let pat = pat.clone();
+                match *op {
+                    Op::Eq => Box::new(move |ref w| wild_match(&pat, &w.name)),
+                    Op::Neq => Box::new(move |ref w| !wild_match(&pat, &w.name)),
+                    _ => {panic!("name can only use Eq|Neq as op")}
+                }
+                
+            },
+            (&Predicate::Id, &Op::Eq, &Matcher::Wildcard(ref id)) => {
+                let id = id.clone();
+                if is_wild_string(&id) {
+                    Box::new(move |ref w| wild_match(&id, &w.id.to_string()))
+                } else {
+                    let i = id.parse::<u32>().unwrap_or(0);
+                    Box::new(move |ref w| w.id == i)
+                }
+            },
+            (&Predicate::Attr(ref attr), op, &Matcher::MapStateValue(ref st)) if attr == "map_state" => {
+                let state = *st;
+                match *op {
+                    Op::Eq => Box::new(move |ref w| w.attrs.map_state == state),
+                    Op::Neq => Box::new(move |ref w| w.attrs.map_state != state),
+                    _ => {panic!("map_state can only use Eq|Neq as op")}
+                }
+                
+            },
+            (&Predicate::Attr(ref attr), op, &Matcher::BoolValue(ref b)) if attr == "override_redirect" => {
+                let or = *b;
+                match *op {
+                    Op::Eq => Box::new(move |ref w| w.attrs.override_redirect == or),
+                    Op::Neq => Box::new(move |ref w| w.attrs.override_redirect != or),
+                    _ => {panic!("override_redirect can only use Eq|Neq as op")}
+                }
+                
+            },
+            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "x" => {
+                let i2 = *i;
+                match *op {
+                    Op::Eq => Box::new(move |ref w| w.geom.x == i2),
+                    Op::Neq => Box::new(move |ref w| w.geom.x != i2),
+                    Op::GT => Box::new(move |ref w| w.geom.x > i2),
+                    Op::LT => Box::new(move |ref w| w.geom.x < i2),
+                    Op::GE => Box::new(move |ref w| w.geom.x >= i2),
+                    Op::LE => Box::new(move |ref w| w.geom.x <= i2),
+                }
+            },
+            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "y" => {
+                let i2 = *i;
+                match *op {
+                    Op::Eq =>  Box::new(move |ref w| w.geom.y == i2),
+                    Op::Neq => Box::new(move |ref w| w.geom.y != i2),
+                    Op::GT =>  Box::new(move |ref w| w.geom.y > i2),
+                    Op::LT =>  Box::new(move |ref w| w.geom.y < i2),
+                    Op::GE =>  Box::new(move |ref w| w.geom.y >= i2),
+                    Op::LE =>  Box::new(move |ref w| w.geom.y <= i2),
+                }
+            },
+            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "width" => {
+                let i2 = *i;
+                match *op {
+                    Op::Eq =>  Box::new(move |ref w| w.geom.width == i2),
+                    Op::Neq => Box::new(move |ref w| w.geom.width != i2),
+                    Op::GT =>  Box::new(move |ref w| w.geom.width > i2),
+                    Op::LT =>  Box::new(move |ref w| w.geom.width < i2),
+                    Op::GE =>  Box::new(move |ref w| w.geom.width >= i2),
+                    Op::LE =>  Box::new(move |ref w| w.geom.width <= i2),
+                }
+            },
+            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "height" => {
+                let i2 = *i;
+                match *op {
+                    Op::Eq =>  Box::new(move |ref w| w.geom.height == i2),
+                    Op::Neq => Box::new(move |ref w| w.geom.height != i2),
+                    Op::GT =>  Box::new(move |ref w| w.geom.height > i2),
+                    Op::LT =>  Box::new(move |ref w| w.geom.height < i2),
+                    Op::GE =>  Box::new(move |ref w| w.geom.height >= i2),
+                    Op::LE =>  Box::new(move |ref w| w.geom.height <= i2),
+                }
+            },
+
+            _ => {
+                panic!("not implement"); 
+            }
+        }
+    }
+}
+
+impl Rule for All { 
+    fn gen_closure(&self) -> FilterFunction {
+        let mut closures = Vec::new();
+        for r in &self.rules {
+            closures.push(r.gen_closure())
+        }
+
+        Box::new(move |ref w| {
+            for f in &closures {
+                if !f(w) {
+                    return false;
+                }
+            }
+
+            true
+        })
+    }
+}
+
+impl Rule for Any {
+    fn gen_closure(&self) -> FilterFunction {
+        let mut closures = Vec::new();
+        for r in &self.rules {
+            closures.push(r.gen_closure())
+        }
+
+        Box::new(move |ref w| {
+            for f in &closures {
+                if f(w) {
+                    return true;
+                }
+            }
+
+            false
+        })
+    }
+}
+
+impl Rule for Not { 
+    fn gen_closure(&self) -> FilterFunction {
+        let f = self.rule.gen_closure();
+        Box::new(move |ref w| !f(w))
+    }
+}
 
 
 
@@ -246,10 +425,31 @@ fn parse_cond(tokens: &mut Tokens) -> Option<BoxedRule> {
             assert!(tokens.len() >= 2);
             match (tokens.pop_front().unwrap(), tokens.pop_front().unwrap()) {
                 (OP(ref op), StrLit(ref s)) => {
+                    let matcher = match pred {
+                        Predicate::Id => Matcher::Wildcard(s.clone()),
+                        Predicate::Name => Matcher::Wildcard(s.clone()),
+                        Predicate::Attr(ref a) if a == "override_redirect" => {
+                            Matcher::BoolValue(match s.to_lowercase().as_str() {
+                                "0" | "false" => false,
+                                _ => true
+                            })
+                        },
+                        Predicate::Attr(ref a) if a == "map_state" => {
+                            Matcher::MapStateValue(match s.to_lowercase().as_str() {
+                                "viewable" => MapState::Viewable,
+                                "unmapped" => MapState::Unmapped,
+                                "unviewable" => MapState::Unviewable,
+                                _ => panic!("bad map state value")
+                            })
+                        },
+                        Predicate::Attr(_) => panic!("bad attr name"),
+                        Predicate::Geom(_) => Matcher::IntegralValue(s.parse::<i32>().unwrap_or(0))
+                    };
+
                     Some(Box::new(FilterRule {
                         pred: pred,
                         op: op.clone(),
-                        matcher: Matcher::Wildcard(s.clone())
+                        matcher: matcher
                     }))
                 }, 
 
@@ -260,7 +460,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<BoxedRule> {
             }
         },
         
-        ANY | ALL | NOT => {
+        ANY | ALL => {
             match_tok!(tokens, LBRACE);
             let mut rules = Vec::new();
             while let Some(cond) = parse_cond(tokens) {
@@ -297,7 +497,7 @@ fn scan_tokens(rule: String) -> Tokens {
     macro_rules! append_tok {
         ($tokens:tt, $tk:expr) => ({
             $tokens.push_back($tk); 
-            println!("collect [{:?}]", $tk);
+            //println!("collect [{:?}]", $tk);
         })
     }
 
@@ -313,7 +513,7 @@ fn scan_tokens(rule: String) -> Tokens {
             None => break,
         };
 
-        wm_debug!("ch = {}", ch); 
+        //wm_debug!("ch = {}", ch); 
         match ch {
             '=' => {
                 append_tok!(tokens, OP(Op::Eq));
@@ -375,7 +575,7 @@ fn scan_tokens(rule: String) -> Tokens {
                 }
 
                 s = s.trim().to_string();
-                wm_debug!("s = {}", s);
+                //wm_debug!("s = {}", s);
 
                 match s.to_lowercase().as_str() {
                     "all" => append_tok!(tokens, ALL),
@@ -392,13 +592,24 @@ fn scan_tokens(rule: String) -> Tokens {
 }
 
 pub fn parse_filter(rule: String) -> Filter {
-    let mut filter = Filter {options: Vec::new(), applys: Vec::new()};
+    let mut filter = Filter {options: Vec::new(), applys: Vec::new(), pins: Vec::new()};
     
     let mut tokens = scan_tokens(rule);
-    let top = parse_rule(&mut tokens);
-    println!("{:?}", top);
+    if let Some(top) = parse_rule(&mut tokens) {
+        //println!("top: {:?}", top);
+        for item in top.iter() {
+            println!("item: {:?}", item);
+            match item.action {
+                Action::FilterOut => {
+                    filter.applys.push(item.rule.gen_closure())
+                },
+                Action::Pin => {
+                    filter.pins.push(item.rule.gen_closure())
+                }
 
-    filter.applys.push(Box::new(move |w: &Window| w.name.contains("mutter")));
+            }
+        }
+    }
 
     filter
 }
@@ -535,12 +746,57 @@ mod tests {
     #[test]
     fn test_parse_flow() {
         let mut tokens = scan_tokens("any(name =dde?osd*, all(geom.x > 2, geom.width < 500));".to_string());
-        println!("{:?}", tokens);
+        println!("tokens: {:?}", tokens);
         assert_eq!(tokens.len(), 23);
 
         let rule = parse_rule(&mut tokens);
-        println!("{:?}", rule);
+        println!("rule: {:?}", rule);
         assert!(rule.is_some());
         assert_eq!(rule.unwrap().len(), 1);
     }
+
+    #[test]
+    fn test_wild_match() {
+        assert!(is_wild_string("dde*"));
+        assert!(is_wild_string("*"));
+        assert!(is_wild_string("dde?desktop"));
+        assert!(!is_wild_string("dde-desktop"));
+
+        assert_eq!(wild_match("dd?", "dde"), true);
+        assert_eq!(wild_match("dd*", "dde"), true);
+        assert_eq!(wild_match("dde*", "dde-osd"), true);
+        assert_eq!(wild_match("dde*osd", "dde-osd"), true);
+        assert_eq!(wild_match("dde*-osd", "dde-osd"), true);
+        assert_eq!(wild_match("dd*?osd", "dde-osd"), true);
+        assert_eq!(wild_match("dd*?", "dde-osd"), true);
+        assert_eq!(wild_match("dd?*", "dde-osd"), true);
+        assert_eq!(wild_match("*dde*", "dde-osd"), true);
+        assert_eq!(wild_match("*dde*", "dde-desktop"), true);
+        assert_eq!(wild_match("*?", "dde-osd"), true);
+        assert_eq!(wild_match("?*", "dde-osd"), true);
+        assert_eq!(wild_match("*", "dde-osd"), true);
+        assert_eq!(wild_match("?*d", "dde-osd"), true);
+        assert_eq!(wild_match("*d", "dde-osd"), true);
+        assert_eq!(wild_match("???*sd", "dde-osd"), true);
+        assert_eq!(wild_match("??*-*", "deepin-wm-switcher"), true);
+        assert_eq!(wild_match("??*-*-??", "deepin-wm-switcher"), false);
+        assert_eq!(wild_match("??*-wm-*", "deepin-wm-switcher"), true);
+
+        assert_eq!(wild_match("*dde*", "ClutterActor: Clutter Reference Manual"), false);
+    }
+
+    #[test]
+    fn test_rule_closure() {
+        let f = parse_filter("name = *dde*;".to_string());
+    }
+
+    #[test]
+    fn test_whole() {
+        let filter = parse_filter("name = dde*;".to_string());
+    }
+
+    //#[test]
+    //fn test_whole2() {
+        //let filter = parse_filter("any(name =dde?osd*, all(geom.x > 2, geom.width < 500));".to_string());
+    //}
 }

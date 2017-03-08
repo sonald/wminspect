@@ -27,6 +27,7 @@ macro_rules! wm_debug {
 fn print_type_of<T>(_: &T) {
     wm_debug!("{}", unsafe { std::intrinsics::type_name::<T>() });
 }
+
 #[cfg(not(feature = "core_intrinsics"))]
 fn print_type_of<T>(_: &T) {
 }
@@ -275,13 +276,13 @@ pub fn collect_windows(c: &xcb::Connection, filter: &Filter) -> Vec<Window> {
         specials.insert("deepin-metacity guard window");
         specials.insert("mutter topleft corner window");
         specials.insert("deepin-metacity topleft corner window");
-        do_filter!(target_windows, filter, |w: &Window| { specials.contains(w.name.as_str()) });
+        do_filter!(target_windows, filter, |w: &Window| { !specials.contains(w.name.as_str()) });
     }
 
     if filter.applys.len() > 0 {
-        // do filter, pin is support now not now
-        //do_filter!(target_windows, filter, *filter.applys[0]);
-        //target_windows = target_windows.into_iter().filter( *filter.applys[0] ) .collect::<Vec<_>>();
+        for rule in &filter.applys {
+            do_filter!(target_windows, filter, rule.as_ref());
+        }
     }
 
     return target_windows;
