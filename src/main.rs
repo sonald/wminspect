@@ -4,6 +4,7 @@ extern crate xcb;
 extern crate getopts;
 
 use std::env;
+use std::collections::HashSet;
 mod wm;
 
 fn usage(program: &String, opts: &getopts::Options)
@@ -49,12 +50,13 @@ pub fn main() {
     if args.opt_present("c") { f.set_colorful(); }
     if args.opt_present("o") { f.set_omit_hidden(); }
     if args.opt_present("s") { f.set_no_special(); }
+    if args.opt_present("d") { f.set_show_diff(); }
 
     if args.opt_present("m") {
         wm::monitor(&c, &screen, &f);
     } else {
         let windows = wm::collect_windows(&c, &f);
-        wm::dump_windows(&windows, &f);
+        wm::dump_windows(&windows, &f, HashSet::new());
     }
 }
 

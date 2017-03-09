@@ -8,6 +8,7 @@ enum Condition {
     MappedOnly,
     OmitHidden,
     NoSpecial,
+    ShowDiff,
 }
 
 type FilterFunction = Box<Fn(&Window) -> bool>;
@@ -41,6 +42,7 @@ impl Filter {
     build_fun!(colorful, set_colorful, Colorful);
     build_fun!(omit_hidden, set_omit_hidden, OmitHidden);
     build_fun!(no_special, set_no_special, NoSpecial);
+    build_fun!(show_diff, set_show_diff, ShowDiff);
 }
 
 

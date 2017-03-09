@@ -27,7 +27,8 @@ not(attrs.map_state=Viewable): pin;
 
 ## TODO
 
-- [ ] do idle update
+- [x] do idle update
 - [x] use DSL to specify filter rule (partially)
-- [ ] highlight diffs across events
+- [x] highlight diffs across events
 - [ ] pin windows (highlight some windows) 
+- [ ] ignore some events
