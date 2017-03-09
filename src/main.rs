@@ -56,7 +56,7 @@ pub fn main() {
         wm::monitor(&c, &screen, &f);
     } else {
         let windows = wm::collect_windows(&c, &f);
-        wm::dump_windows(&windows, &f, HashSet::new());
+        wm::dump_windows(&windows, &f, None);
     }
 }
 

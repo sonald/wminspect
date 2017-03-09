@@ -236,13 +236,6 @@ macro_rules! do_filter {
         )
 }
 
-fn make_diffs(orig: &Vec<Window>, new: &Vec<Window>) -> HashSet<xcb::Window> {
-    let mut set = HashSet::new();
-
-
-    set
-}
-
 pub fn collect_windows(c: &xcb::Connection, filter: &Filter) -> Vec<Window> {
     let screen = c.get_setup().roots().next().unwrap();
     let res = match xcb::query_tree(&c, screen.root()).get_reply() {
@@ -321,7 +314,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
     let need_configure = Arc::new(Mutex::new(false));
     let (tx, rx) = mpsc::channel::<Message>();
 
-    dump_windows(&windows.lock().unwrap(), filter, HashSet::new());
+    dump_windows(&windows.lock().unwrap(), filter, None);
     print_type_of(&windows);
 
     crossbeam::scope(|scope| {
@@ -361,7 +354,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         println!("delayed configure 0x{:x} ", *last_configure_xid.lock().unwrap());
                         *windows.lock().unwrap() = collect_windows(&c, filter);
                         let diff = hashset!(*last_configure_xid.lock().unwrap());
-                        dump_windows(&windows.lock().unwrap(), filter, diff);
+                        dump_windows(&windows.lock().unwrap(), filter, Some(diff));
                         *need_configure.lock().unwrap() = false;
                     }
                 }
@@ -384,7 +377,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         // assumes that window will be at top when created
                         windows.lock().unwrap().push(query_window(&c, cne.window()));
                         let diff = hashset!(cne.window());
-                        dump_windows(&windows.lock().unwrap(), filter, diff);
+                        dump_windows(&windows.lock().unwrap(), filter, Some(diff));
                     },
                     xcb::xproto::DESTROY_NOTIFY => {
                         let dne = xcb::cast_event::<xcb::DestroyNotifyEvent>(&ev);
@@ -392,7 +385,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         if event_related(dne.window(), &windows.lock().unwrap()) {
                             println!("destroy 0x{:x}", dne.window());
                             windows.lock().unwrap().retain(|ref w| w.id != dne.window());
-                            dump_windows(&windows.lock().unwrap(), filter, HashSet::new());
+                            dump_windows(&windows.lock().unwrap(), filter, None);
                         }
                     },
                     xcb::xproto::REPARENT_NOTIFY => {
@@ -402,7 +395,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                             println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
                             windows.lock().unwrap().retain(|ref w| w.id != rne.window());
                             let diff = hashset!(rne.window());
-                            dump_windows(&windows.lock().unwrap(), filter, HashSet::new());
+                            dump_windows(&windows.lock().unwrap(), filter, Some(diff));
                         }
                     },
 
@@ -414,7 +407,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                                 println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
                                 *windows.lock().unwrap() = collect_windows(&c, filter);
                                 let diff = hashset!(cne.window());
-                                dump_windows(&windows.lock().unwrap(), filter, diff);
+                                dump_windows(&windows.lock().unwrap(), filter, Some(diff));
                                 *last_configure_xid.lock().unwrap() = cne.window();
                                 tx.send(Message::Reset).unwrap();
 
@@ -436,7 +429,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                                 diff = hashset!(mn.window());
                             }
                             println!("map 0x{:x}", mn.window());
-                            dump_windows(&windows.lock().unwrap(), filter, diff);
+                            dump_windows(&windows.lock().unwrap(), filter, Some(diff));
                         }
                     },
 
@@ -452,7 +445,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                                 diff = hashset!(un.window());
                             }
                             println!("unmap 0x{:x}", un.window());
-                            dump_windows(&windows.lock().unwrap(), filter, diff);
+                            dump_windows(&windows.lock().unwrap(), filter, Some(diff));
                         }
                     },
 
@@ -495,8 +488,9 @@ fn win2str(w: &Window, colored: bool) -> String {
     }
 }
 
-pub fn dump_windows(windows: &Vec<Window>, filter: &Filter, changes: HashSet<xcb::Window>) {
+pub fn dump_windows(windows: &Vec<Window>, filter: &Filter, changes: Option<HashSet<xcb::Window>>) {
     let colored = filter.colorful();
+    let changes = changes.unwrap_or(HashSet::new());
     for (i, w) in windows.iter().enumerate() {
         if filter.show_diff() && changes.contains(&w.id) {
             println!("{}: {}", i, win2str(w, colored).on_white());

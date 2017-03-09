@@ -114,7 +114,31 @@ struct Not {
     rule: BoxedRule
 }
 
+
 fn wild_match(pat: &str, s: &str) -> bool {
+    // non recursive algorithm
+    fn mat2(pat: &[char], s: &[char]) -> bool {
+        let (mut i, mut j) = (0, 0);
+        let mut star = usize::max_value();
+        let mut k = 0;
+        while j < s.len() {
+            if pat.get(i).unwrap_or(&'\0') == &'?' || pat.get(i).unwrap_or(&'\0') == &s[j] {
+                i += 1; j += 1; 
+            } else if pat.get(i).unwrap_or(&'\0') == &'*' {
+                star = i; k = j; i += 1; 
+            } else if pat.get(star).is_some() {
+                k += 1; j = k; i = star + 1;
+            } else {
+                return false;
+            } 
+        }
+
+        while pat.get(i).unwrap_or(&'\0') == &'*' {
+            i += 1; 
+        }
+        i == pat.len()
+    }
+
     fn mat_star(pat: &[char], i: usize, s: &[char], mut j: usize) -> bool {
         while j <= s.len() {
             if mat(pat, i+1, s, j) {
@@ -142,7 +166,8 @@ fn wild_match(pat: &str, s: &str) -> bool {
 
     let res;
     if is_wild_string(pat) {
-        res = mat(&pat.chars().collect::<Vec<_>>(), 0, &s.chars().collect::<Vec<_>>(), 0);
+        //res = mat(&pat.chars().collect::<Vec<_>>(), 0, &s.chars().collect::<Vec<_>>(), 0);
+        res = mat2(&pat.chars().collect::<Vec<_>>(), &s.chars().collect::<Vec<_>>());
     } else {
         res = s.contains(pat);
     }
