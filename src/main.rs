@@ -3,10 +3,7 @@
 extern crate xcb;
 extern crate getopts;
 
-use std::fmt::*;
 use std::env;
-use xcb::xproto;
-
 mod wm;
 
 fn usage(program: &String, opts: &getopts::Options)

@@ -1,11 +1,6 @@
-extern crate regex;
-
 use super::wm::*;
 use std::fmt::Debug;
-use self::regex::Regex;
 use std::collections::HashSet;
-use std::str::Chars;
-use std::iter::Peekable;
 
 #[derive(Debug, Clone)]
 enum Condition {
@@ -83,9 +78,7 @@ enum Op {
 
 // marker
 trait Rule : Debug { 
-    fn gen_closure(&self) -> FilterFunction {
-        Box::new(|ref w|true)
-    }
+    fn gen_closure(&self) -> FilterFunction;
 }
 
 type BoxedRule = Box<Rule + Send>;
@@ -120,7 +113,7 @@ struct Not {
 }
 
 fn wild_match(pat: &str, s: &str) -> bool {
-    fn mat_star(pat: &[char], mut i: usize, s: &[char], mut j: usize) -> bool {
+    fn mat_star(pat: &[char], i: usize, s: &[char], mut j: usize) -> bool {
         while j <= s.len() {
             if mat(pat, i+1, s, j) {
                 return true;
@@ -131,7 +124,7 @@ fn wild_match(pat: &str, s: &str) -> bool {
         false
     }
 
-    fn mat(pat: &[char], mut i: usize, s: &[char], mut j: usize) -> bool {
+    fn mat(pat: &[char], i: usize, s: &[char], j: usize) -> bool {
         if pat.len() == i || s.len() == j {
             return pat.len() == i && s.len() == j;
         }
@@ -502,10 +495,9 @@ fn scan_tokens(rule: String) -> Tokens {
     }
 
     let mut tokens = Tokens::new();
-
     let mut chars = rule.chars().peekable();
-
     let metas: HashSet<_> = ['.', ',', ';', ':', '(', ')', '<', '>', '='].iter().cloned().collect();
+    let mut need_act = false;
 
     loop {
         let ch = match chars.next() {
@@ -551,8 +543,14 @@ fn scan_tokens(rule: String) -> Tokens {
 
             '.' => { append_tok!(tokens, DOT); },
             ',' => { append_tok!(tokens, COMMA); },
-            ';' => { append_tok!(tokens, SEMICOLON); },
-            ':' => { append_tok!(tokens, COLON); },
+            ';' => { 
+                append_tok!(tokens, SEMICOLON); 
+                need_act = false;
+            },
+            ':' => { 
+                append_tok!(tokens, COLON);
+                need_act = true;
+            },
             '(' => { append_tok!(tokens, LBRACE); },
             ')' => { append_tok!(tokens, RBRACE); },
 
@@ -581,6 +579,8 @@ fn scan_tokens(rule: String) -> Tokens {
                     "all" => append_tok!(tokens, ALL),
                     "any" => append_tok!(tokens, ANY),
                     "not" => append_tok!(tokens, NOT),
+                    "pin" if need_act => append_tok!(tokens, ACTION(Action::Pin)),
+                    "filter" if need_act => append_tok!(tokens, ACTION(Action::FilterOut)),
                     lowered @ _ => append_tok!(tokens, StrLit(lowered.to_string()))
                 }
             }
@@ -596,9 +596,8 @@ pub fn parse_filter(rule: String) -> Filter {
     
     let mut tokens = scan_tokens(rule);
     if let Some(top) = parse_rule(&mut tokens) {
-        //println!("top: {:?}", top);
         for item in top.iter() {
-            println!("item: {:?}", item);
+            wm_debug!("item: {:?}", item);
             match item.action {
                 Action::FilterOut => {
                     filter.applys.push(item.rule.gen_closure())

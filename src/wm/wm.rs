@@ -7,7 +7,6 @@ extern crate crossbeam;
 use std;
 use self::colored::*;
 use std::fmt::*;
-use std::env;
 use std::time;
 use std::thread;
 use xcb::xproto;
@@ -295,8 +294,6 @@ pub enum Message {
     Quit,
 }
 
-use std::io::Write;
-
 pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
     let c = Arc::new(c);
 
@@ -305,7 +302,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                                           &[(xcb::xproto::CW_EVENT_MASK, ev_mask)]);
     c.flush();
 
-    let mut windows = Arc::new(Mutex::new(collect_windows(&c, filter)));
+    let windows = Arc::new(Mutex::new(collect_windows(&c, filter)));
     let last_configure_xid = Arc::new(Mutex::new(xcb::WINDOW_NONE));
     let need_configure = Arc::new(Mutex::new(false));
     let (tx, rx) = mpsc::channel::<Message>();
@@ -446,7 +443,10 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
             thread::sleep(time::Duration::from_millis(50));
         }
 
-        tx.send(Message::Quit);
+        match tx.send(Message::Quit) {
+            Ok(_) => {},
+            Err(_) => {wm_debug!("send message error")}
+        }
     });
 }
 
