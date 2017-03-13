@@ -30,5 +30,9 @@ not(attrs.map_state=Viewable): pin;
 - [x] do idle update
 - [x] use DSL to specify filter rule (partially)
 - [x] highlight diffs across events
-- [ ] pin windows (highlight some windows) 
+- [ ] pin windows (highlight some windows everlasting) 
 - [ ] ignore some events
+- [ ] (de)serialize rules from/into disk 
+- [ ] event timestamp?
+- [ ] rule databases (based on serialization)
+- [ ] cut off long name display 

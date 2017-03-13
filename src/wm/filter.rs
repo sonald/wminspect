@@ -13,10 +13,15 @@ enum Condition {
 
 type FilterFunction = Box<Fn(&Window) -> bool>;
 
+pub struct ActionFuncPair {
+    pub action: Action,
+    pub func: FilterFunction
+}
+
 pub struct Filter {
     options: Vec<Condition>,
-    pub applys: Vec<FilterFunction>,
-    pub pins: Vec<FilterFunction>
+    pub rules: Vec<ActionFuncPair>
+        
 }
 
 unsafe impl Sync for Filter {}
@@ -47,7 +52,7 @@ impl Filter {
 
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum Action {
+pub enum Action {
     FilterOut,
     Pin,
 }
@@ -619,21 +624,13 @@ fn scan_tokens(rule: String) -> Tokens {
 }
 
 pub fn parse_filter(rule: String) -> Filter {
-    let mut filter = Filter {options: Vec::new(), applys: Vec::new(), pins: Vec::new()};
+    let mut filter = Filter { options: Vec::new(), rules: Vec::new(), };
     
     let mut tokens = scan_tokens(rule);
     if let Some(top) = parse_rule(&mut tokens) {
         for item in top.iter() {
             wm_debug!("item: {:?}", item);
-            match item.action {
-                Action::FilterOut => {
-                    filter.applys.push(item.rule.gen_closure())
-                },
-                Action::Pin => {
-                    filter.pins.push(item.rule.gen_closure())
-                }
-
-            }
+            filter.rules.push(ActionFuncPair {action: item.action, func: item.rule.gen_closure()});
         }
     }
 

@@ -236,6 +236,29 @@ macro_rules! do_filter {
         )
 }
 
+fn is_window_pinned(w: &Window, filter: &Filter) -> bool {
+    for rule in &filter.rules {
+        if rule.action == Action::Pin && rule.func.as_ref()(w) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn collect_pinned_windows(windows: &Vec<Window>, filter: &Filter) -> HashSet<xcb::Window> {
+    let f = |w: &Window| {
+        for rule in &filter.rules {
+            if rule.action == Action::Pin && rule.func.as_ref()(w) {
+                return Some(w.id.clone());
+            }
+        }
+        None
+    };
+
+    windows.iter().filter_map(f).collect()
+}
+
 pub fn collect_windows(c: &xcb::Connection, filter: &Filter) -> Vec<Window> {
     let screen = c.get_setup().roots().next().unwrap();
     let res = match xcb::query_tree(&c, screen.root()).get_reply() {
@@ -278,14 +301,28 @@ pub fn collect_windows(c: &xcb::Connection, filter: &Filter) -> Vec<Window> {
         do_filter!(target_windows, filter, |w: &Window| { !specials.contains(w.name.as_str()) });
     }
 
-    if filter.applys.len() > 0 {
-        for rule in &filter.applys {
-            do_filter!(target_windows, filter, rule.as_ref());
+    if filter.rules.len() > 0 {
+        for rule in &filter.rules {
+            if rule.action == Action::FilterOut {
+                do_filter!(target_windows, filter, rule.func.as_ref());
+            }
         }
     }
 
     return target_windows;
 }
+
+pub fn dump_windows(windows: &Vec<Window>, filter: &Filter, changes: &HashSet<xcb::Window>) {
+    let colored = filter.colorful();
+    for (i, w) in windows.iter().enumerate() {
+        if filter.show_diff() && changes.contains(&w.id) {
+            println!("{}: {}", i, win2str(w, colored).on_white());
+        } else {
+            println!("{}: {}", i, win2str(w, colored));
+        }
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -301,6 +338,7 @@ macro_rules! hashset {
         h
     })
 }
+
 pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
     let c = Arc::new(c);
 
@@ -312,14 +350,16 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
     let windows = Arc::new(Mutex::new(collect_windows(&c, filter)));
     let last_configure_xid = Arc::new(Mutex::new(xcb::WINDOW_NONE));
     let need_configure = Arc::new(Mutex::new(false));
+    let diff = Arc::new(Mutex::new(collect_pinned_windows(windows.lock().unwrap().as_ref(), filter)));
     let (tx, rx) = mpsc::channel::<Message>();
 
-    dump_windows(&windows.lock().unwrap(), filter, None);
+    dump_windows(&windows.lock().unwrap(), filter, &diff.lock().unwrap());
     print_type_of(&windows);
 
     crossbeam::scope(|scope| {
         {
             let windows = windows.clone();
+            let diff = diff.clone();
             let (c, need_configure) = (c.clone(), need_configure.clone());
             let last_configure_xid = last_configure_xid.clone();
             let event_related = |ev_win: xcb::Window, windows: &Vec<Window>| windows.iter().any(|ref w| w.id == ev_win);
@@ -352,9 +392,13 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
 
                         wm_debug!("timedout, reload");
                         println!("delayed configure 0x{:x} ", *last_configure_xid.lock().unwrap());
+
                         *windows.lock().unwrap() = collect_windows(&c, filter);
-                        let diff = hashset!(*last_configure_xid.lock().unwrap());
-                        dump_windows(&windows.lock().unwrap(), filter, Some(diff));
+                        //configure should never change diff set in my knowledge, so leave diff as
+                        //it was.
+                        assert!(diff.lock().unwrap().contains(&last_configure_xid.lock().unwrap()));
+
+                        dump_windows(&windows.lock().unwrap(), filter, &diff.lock().unwrap());
                         *need_configure.lock().unwrap() = false;
                     }
                 }
@@ -375,9 +419,15 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         println!("create 0x{:x}, parent 0x{:x}", cne.window(), cne.parent());
 
                         // assumes that window will be at top when created
-                        windows.lock().unwrap().push(query_window(&c, cne.window()));
-                        let diff = hashset!(cne.window());
-                        dump_windows(&windows.lock().unwrap(), filter, Some(diff));
+                        let new_win = query_window(&c, cne.window());
+                        {
+                            let mut locked = diff.lock().unwrap();
+                            if is_window_pinned(&new_win, filter) {
+                                locked.insert(cne.window());
+                            }
+                        }
+                        windows.lock().unwrap().push(new_win);
+                        dump_windows(&windows.lock().unwrap(), filter, &diff.lock().unwrap());
                     },
                     xcb::xproto::DESTROY_NOTIFY => {
                         let dne = xcb::cast_event::<xcb::DestroyNotifyEvent>(&ev);
@@ -385,17 +435,44 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         if event_related(dne.window(), &windows.lock().unwrap()) {
                             println!("destroy 0x{:x}", dne.window());
                             windows.lock().unwrap().retain(|ref w| w.id != dne.window());
-                            dump_windows(&windows.lock().unwrap(), filter, None);
+                            {
+                                let mut locked = diff.lock().unwrap();
+                                if locked.contains(&dne.window()) {
+                                    locked.remove(&dne.window());
+                                }
+                            }
+                            dump_windows(&windows.lock().unwrap(), filter, &diff.lock().unwrap());
                         }
                     },
+
                     xcb::xproto::REPARENT_NOTIFY => {
                         let rne = xcb::cast_event::<xcb::ReparentNotifyEvent>(&ev);
 
-                        if event_related(rne.window(), &windows.lock().unwrap()) && rne.parent() != screen.root() {
-                            println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
-                            windows.lock().unwrap().retain(|ref w| w.id != rne.window());
-                            let diff = hashset!(rne.window());
-                            dump_windows(&windows.lock().unwrap(), filter, Some(diff));
+                        let mut windows = windows.lock().unwrap();
+                        if event_related(rne.window(), &windows) {
+                            if rne.parent() != screen.root() {
+                                println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
+                                windows.retain(|ref w| w.id != rne.window());
+                                {
+                                    let mut locked = diff.lock().unwrap();
+                                    if locked.contains(&rne.window()) {
+                                        locked.remove(&rne.window());
+                                    }
+                                }
+                                dump_windows(&windows, filter, &diff.lock().unwrap());
+
+                            } else {
+                                println!("reparent 0x{:x} to root", rne.window());
+                                let new_win = query_window(&c, rne.window());
+                                {
+                                    let mut locked = diff.lock().unwrap();
+                                    if is_window_pinned(&new_win, filter) {
+                                        locked.insert(rne.window());
+                                    }
+                                }
+                                windows.push(new_win);
+                                dump_windows(&windows, filter, &diff.lock().unwrap());
+                            }
                         }
                     },
 
@@ -406,8 +483,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                             if *last_configure_xid.lock().unwrap() != cne.window() {
                                 println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
                                 *windows.lock().unwrap() = collect_windows(&c, filter);
-                                let diff = hashset!(cne.window());
-                                dump_windows(&windows.lock().unwrap(), filter, Some(diff));
+                                dump_windows(&windows.lock().unwrap(), filter, &diff.lock().unwrap());
                                 *last_configure_xid.lock().unwrap() = cne.window();
                                 tx.send(Message::Reset).unwrap();
 
@@ -420,16 +496,19 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     xproto::MAP_NOTIFY => {
                         let mn = xcb::cast_event::<xcb::MapNotifyEvent>(&ev);
 
-                        if event_related(mn.window(), &windows.lock().unwrap()) {
-                            let mut diff;
+                        let mut windows = windows.lock().unwrap();
+                        if event_related(mn.window(), &windows) {
                             {
-                                let mut locked = windows.lock().unwrap();
-                                let mut win = locked.iter_mut().find(|ref mut w| w.id == mn.window()).unwrap();
+                                let mut win = windows.iter_mut().find(|ref mut w| w.id == mn.window()).unwrap();
                                 win.attrs.map_state = MapState::Viewable;
-                                diff = hashset!(mn.window());
+                                println!("map 0x{:x}", mn.window());
+
+                                let mut locked = diff.lock().unwrap();
+                                if is_window_pinned(&win, filter) {
+                                    locked.insert(mn.window());
+                                }
                             }
-                            println!("map 0x{:x}", mn.window());
-                            dump_windows(&windows.lock().unwrap(), filter, Some(diff));
+                            dump_windows(&windows, filter, &diff.lock().unwrap());
                         }
                     },
 
@@ -437,15 +516,19 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         let un = xcb::cast_event::<xcb::UnmapNotifyEvent>(&ev);
 
                         if event_related(un.window(), &windows.lock().unwrap()) {
-                            let mut diff;
                             {
                                 let mut locked = windows.lock().unwrap();
                                 let mut win = locked.iter_mut().find(|ref w| w.id == un.window()).unwrap();
                                 win.attrs.map_state = MapState::Unmapped;
-                                diff = hashset!(un.window());
                             }
                             println!("unmap 0x{:x}", un.window());
-                            dump_windows(&windows.lock().unwrap(), filter, Some(diff));
+                            {
+                                let mut locked = diff.lock().unwrap();
+                                if locked.contains(&un.window()) {
+                                    locked.remove(&un.window());
+                                }
+                            }
+                            dump_windows(&windows.lock().unwrap(), filter, &diff.lock().unwrap());
                         }
                     },
 
@@ -485,18 +568,6 @@ fn win2str(w: &Window, colored: bool) -> String {
         format!("{}({}) {} {} {}", id.blue(), w.name.cyan(), geom_str.red(), or.green(), state.cyan())
     } else {
         format!("{}({}) {} {} {}", id, w.name, geom_str, or, state)
-    }
-}
-
-pub fn dump_windows(windows: &Vec<Window>, filter: &Filter, changes: Option<HashSet<xcb::Window>>) {
-    let colored = filter.colorful();
-    let changes = changes.unwrap_or(HashSet::new());
-    for (i, w) in windows.iter().enumerate() {
-        if filter.show_diff() && changes.contains(&w.id) {
-            println!("{}: {}", i, win2str(w, colored).on_white());
-        } else {
-            println!("{}: {}", i, win2str(w, colored));
-        }
     }
 }
 
