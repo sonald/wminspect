@@ -9,6 +9,21 @@ on mac os, install xquartz, and then
 ## Design
 use DSL for rule to filter windows and other stuff
 
+the grammar is basically like this:
+```
+ top -> ( item ( ';' item )* )?
+ item -> cond ( ':' action)? 
+ cond -> pred op VAL
+     | ANY '(' cond (',' cond )* ')'
+     | ALL '(' cond (',' cond )* ')'
+     | NOT '(' cond ')'
+ pred -> ID ('.' ID)*
+ op -> '=' | '>' | '<' | '>=' | '<=' | '<>'
+ action -> 'filter' | 'pin'
+ ID -> STRING_LIT
+ VAL -> STRING_LIT
+```
+
 filtering windows
 ```
 any(attrs.map_state=Viewable, all(geom.x>2, geom.w>100))

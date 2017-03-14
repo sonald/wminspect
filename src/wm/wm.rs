@@ -549,6 +549,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
 }
 
 
+//TODO: cut off name according to tty columns
 fn win2str(w: &Window, colored: bool) -> String {
     let geom_str = format!("{}x{}+{}+{}", w.geom.width, w.geom.height,
                            w.geom.x, w.geom.y);

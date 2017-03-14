@@ -200,7 +200,7 @@ impl Rule for FilterRule {
             (&Predicate::Id, &Op::Eq, &Matcher::Wildcard(ref id)) => {
                 let id = id.clone();
                 if is_wild_string(&id) {
-                    Box::new(move |ref w| wild_match(&id, &w.id.to_string()))
+                    Box::new(move |ref w| wild_match(&id, &format!("0x{:x}", w.id)))
                 } else {
                     let i = id.parse::<u32>().unwrap_or(0);
                     Box::new(move |ref w| w.id == i)
@@ -225,47 +225,47 @@ impl Rule for FilterRule {
                 
             },
             (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "x" => {
-                let i2 = *i;
+                let i = *i;
                 match *op {
-                    Op::Eq => Box::new(move |ref w| w.geom.x == i2),
-                    Op::Neq => Box::new(move |ref w| w.geom.x != i2),
-                    Op::GT => Box::new(move |ref w| w.geom.x > i2),
-                    Op::LT => Box::new(move |ref w| w.geom.x < i2),
-                    Op::GE => Box::new(move |ref w| w.geom.x >= i2),
-                    Op::LE => Box::new(move |ref w| w.geom.x <= i2),
+                    Op::Eq => Box::new(move |ref w| w.geom.x == i),
+                    Op::Neq => Box::new(move |ref w| w.geom.x != i),
+                    Op::GT => Box::new(move |ref w| w.geom.x > i),
+                    Op::LT => Box::new(move |ref w| w.geom.x < i),
+                    Op::GE => Box::new(move |ref w| w.geom.x >= i),
+                    Op::LE => Box::new(move |ref w| w.geom.x <= i),
                 }
             },
             (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "y" => {
-                let i2 = *i;
+                let i = *i;
                 match *op {
-                    Op::Eq =>  Box::new(move |ref w| w.geom.y == i2),
-                    Op::Neq => Box::new(move |ref w| w.geom.y != i2),
-                    Op::GT =>  Box::new(move |ref w| w.geom.y > i2),
-                    Op::LT =>  Box::new(move |ref w| w.geom.y < i2),
-                    Op::GE =>  Box::new(move |ref w| w.geom.y >= i2),
-                    Op::LE =>  Box::new(move |ref w| w.geom.y <= i2),
+                    Op::Eq =>  Box::new(move |ref w| w.geom.y == i),
+                    Op::Neq => Box::new(move |ref w| w.geom.y != i),
+                    Op::GT =>  Box::new(move |ref w| w.geom.y > i),
+                    Op::LT =>  Box::new(move |ref w| w.geom.y < i),
+                    Op::GE =>  Box::new(move |ref w| w.geom.y >= i),
+                    Op::LE =>  Box::new(move |ref w| w.geom.y <= i),
                 }
             },
             (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "width" => {
-                let i2 = *i;
+                let i = *i;
                 match *op {
-                    Op::Eq =>  Box::new(move |ref w| w.geom.width == i2),
-                    Op::Neq => Box::new(move |ref w| w.geom.width != i2),
-                    Op::GT =>  Box::new(move |ref w| w.geom.width > i2),
-                    Op::LT =>  Box::new(move |ref w| w.geom.width < i2),
-                    Op::GE =>  Box::new(move |ref w| w.geom.width >= i2),
-                    Op::LE =>  Box::new(move |ref w| w.geom.width <= i2),
+                    Op::Eq =>  Box::new(move |ref w| w.geom.width == i),
+                    Op::Neq => Box::new(move |ref w| w.geom.width != i),
+                    Op::GT =>  Box::new(move |ref w| w.geom.width > i),
+                    Op::LT =>  Box::new(move |ref w| w.geom.width < i),
+                    Op::GE =>  Box::new(move |ref w| w.geom.width >= i),
+                    Op::LE =>  Box::new(move |ref w| w.geom.width <= i),
                 }
             },
             (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "height" => {
-                let i2 = *i;
+                let i = *i;
                 match *op {
-                    Op::Eq =>  Box::new(move |ref w| w.geom.height == i2),
-                    Op::Neq => Box::new(move |ref w| w.geom.height != i2),
-                    Op::GT =>  Box::new(move |ref w| w.geom.height > i2),
-                    Op::LT =>  Box::new(move |ref w| w.geom.height < i2),
-                    Op::GE =>  Box::new(move |ref w| w.geom.height >= i2),
-                    Op::LE =>  Box::new(move |ref w| w.geom.height <= i2),
+                    Op::Eq =>  Box::new(move |ref w| w.geom.height == i),
+                    Op::Neq => Box::new(move |ref w| w.geom.height != i),
+                    Op::GT =>  Box::new(move |ref w| w.geom.height > i),
+                    Op::LT =>  Box::new(move |ref w| w.geom.height < i),
+                    Op::GE =>  Box::new(move |ref w| w.geom.height >= i),
+                    Op::LE =>  Box::new(move |ref w| w.geom.height <= i),
                 }
             },
 
