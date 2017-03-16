@@ -3,6 +3,7 @@ extern crate getopts;
 extern crate colored;
 extern crate timer;
 extern crate crossbeam;
+extern crate libc;
 
 use std;
 use self::colored::*;
@@ -54,6 +55,16 @@ impl PartialEq for MapState {
 
 impl Eq for MapState { }
 
+impl Display for MapState {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{}", match *self {
+            MapState::Unmapped => "Unmapped",
+            MapState::Unviewable => "Unviewable",
+            MapState::Viewable => "Viewable"
+        })
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct Attributes {
     pub override_redirect: bool,
@@ -79,11 +90,7 @@ impl Display for Window {
         } else {
             ""
         }).green();
-        let state = format!("{}", match self.attrs.map_state {
-            MapState::Unmapped => "Unmapped",
-            MapState::Unviewable => "Unviewable",
-            MapState::Viewable => "Viewable"
-        }).cyan();
+        let state = format!("{}", self.attrs.map_state).cyan();
         write!(f, "{}({}) {} {} {}", id, self.name.cyan(), geom_str, or, state)
     }
 }
@@ -548,9 +555,20 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
     });
 }
 
+fn get_tty_cols() -> Option<usize> {
+    let mut winsz: libc::winsize;
+    unsafe {
+        winsz = std::mem::uninitialized();
+        match libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, 
+                          &mut winsz as *mut libc::winsize) {
+            0 => Some(winsz.ws_col as usize),
+            _ => None
+        }
+    }
+}
 
 //TODO: cut off name according to tty columns
-fn win2str(w: &Window, colored: bool) -> String {
+fn win2str(w: &Window, mut colored: bool) -> String {
     let geom_str = format!("{}x{}+{}+{}", w.geom.width, w.geom.height,
                            w.geom.x, w.geom.y);
     let id = format!("0x{:x}", w.id);
@@ -559,14 +577,17 @@ fn win2str(w: &Window, colored: bool) -> String {
     } else {
         ""
     });
-    let state = format!("{}", match w.attrs.map_state {
-        MapState::Unmapped => "Unmapped",
-        MapState::Unviewable => "Unviewable",
-        MapState::Viewable => "Viewable"
-    });
+    let state = format!("{}", w.attrs.map_state);
+
+    if unsafe { libc::isatty(libc::STDOUT_FILENO) } == 0 {
+        colored = false;
+    } 
+    let cols = get_tty_cols().unwrap_or(80) / 2;
+    //FIXME: try estimate length by bytes, not chars
+    let name = w.name.chars().take(cols).collect::<String>();
 
     if colored {
-        format!("{}({}) {} {} {}", id.blue(), w.name.cyan(), geom_str.red(), or.green(), state.cyan())
+        format!("{}({}) {} {} {}", id.blue(), name.cyan(), geom_str.red(), or.green(), state.cyan())
     } else {
         format!("{}({}) {} {} {}", id, w.name, geom_str, or, state)
     }

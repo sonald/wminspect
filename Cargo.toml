@@ -7,6 +7,7 @@ build = "build.rs"
 
 [dependencies]
 #x11 = "2.12.1"
+libc = "*"
 xcb = {version = "0.7.6", features = ["thread"]}
 getopts = "0.2.*"
 colored = "1.4"
