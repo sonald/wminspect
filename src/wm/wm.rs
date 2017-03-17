@@ -40,6 +40,13 @@ pub struct Geometry<T> where T: Copy {
     pub height: T,
 }
 
+impl<T> Display for Geometry<T> where T: Display + Copy {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "{}", format!("{}x{}+{}+{}", self.width, self.height,
+                                self.x, self.y))
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum MapState {
     Unmapped,
@@ -71,6 +78,13 @@ pub struct Attributes {
     pub map_state: MapState,
 }
 
+impl Display for Attributes {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{}{}", if self.override_redirect { "OR " } else {""}, 
+               self.map_state)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Window {
     pub id: xcb::Window,
@@ -82,16 +96,8 @@ pub struct Window {
 
 impl Display for Window {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let geom_str = format!("{}x{}+{}+{}", self.geom.width, self.geom.height,
-           self.geom.x, self.geom.y).red();
-        let id = format!("0x{:x}", self.id).blue();
-        let or = format!("{}", if self.attrs.override_redirect {
-            "OR"
-        } else {
-            ""
-        }).green();
-        let state = format!("{}", self.attrs.map_state).cyan();
-        write!(f, "{}({}) {} {} {}", id, self.name.cyan(), geom_str, or, state)
+        let id = format!("0x{:x}", self.id);
+        write!(f, "{}({}) {} {}", id, self.name, self.geom, self.attrs)
     }
 }
 
@@ -569,15 +575,9 @@ fn get_tty_cols() -> Option<usize> {
 
 //TODO: cut off name according to tty columns
 fn win2str(w: &Window, mut colored: bool) -> String {
-    let geom_str = format!("{}x{}+{}+{}", w.geom.width, w.geom.height,
-                           w.geom.x, w.geom.y);
+    let geom_str = format!("{}", w.geom);
     let id = format!("0x{:x}", w.id);
-    let or = format!("{}", if w.attrs.override_redirect {
-        "OR"
-    } else {
-        ""
-    });
-    let state = format!("{}", w.attrs.map_state);
+    let attrs = format!("{}", w.attrs);
 
     if unsafe { libc::isatty(libc::STDOUT_FILENO) } == 0 {
         colored = false;
@@ -587,9 +587,9 @@ fn win2str(w: &Window, mut colored: bool) -> String {
     let name = w.name.chars().take(cols).collect::<String>();
 
     if colored {
-        format!("{}({}) {} {} {}", id.blue(), name.cyan(), geom_str.red(), or.green(), state.cyan())
+        format!("{}({}) {} {}", id.blue(), name.cyan(), geom_str.red(), attrs.green())
     } else {
-        format!("{}({}) {} {} {}", id, w.name, geom_str, or, state)
+        format!("{}({}) {} {}", id, w.name, geom_str, attrs)
     }
 }
 
