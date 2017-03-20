@@ -13,6 +13,7 @@ use std::thread;
 use xcb::xproto;
 use std::sync::*;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::filter::*;
 
@@ -282,7 +283,7 @@ pub fn collect_windows(c: &xcb::Connection, filter: &Filter) -> Vec<Window> {
     let mut target_windows = query_windows(&c, &res);
 
     if filter.mapped_only() || filter.omit_hidden() {
-        let has_guard_window = target_windows.as_slice().iter()
+        let has_guard_window = target_windows.iter()
             .any(|ref w| w.name.contains("guard window") && w.attrs.override_redirect);
 
         do_filter!(target_windows, skip_while, |ref w| {
@@ -362,7 +363,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
 
     let windows = Arc::new(Mutex::new(collect_windows(&c, filter)));
     let last_configure_xid = Arc::new(Mutex::new(xcb::WINDOW_NONE));
-    let need_configure = Arc::new(Mutex::new(false));
+    let need_configure = AtomicBool::new(false);
     let diff = Arc::new(Mutex::new(collect_pinned_windows(windows.lock().unwrap().as_ref(), filter)));
     let (tx, rx) = mpsc::channel::<Message>();
 
@@ -370,16 +371,15 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
     print_type_of(&windows);
 
     crossbeam::scope(|scope| {
+
         {
             let windows = windows.clone();
             let diff = diff.clone();
-            let (c, need_configure) = (c.clone(), need_configure.clone());
+            let c = c.clone();
             let last_configure_xid = last_configure_xid.clone();
-            let event_related = |ev_win: xcb::Window, windows: &Vec<Window>| windows.iter().any(|ref w| w.id == ev_win);
 
-            print_type_of(&event_related);
             scope.spawn(move || {
-                print_type_of(&need_configure);
+                let event_related = |ev_win: xcb::Window| windows.lock().unwrap().iter().any(|ref w| w.id == ev_win);
                 print_type_of(filter);
 
                 let idle_configure_timeout = time::Duration::from_millis(200);
@@ -390,17 +390,17 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         Ok(Message::TimeoutEvent) => { 
                             wm_debug!("recv timeout"); 
                             last_checked_time = time::Instant::now();
-                            *need_configure.lock().unwrap() = true;
+                            need_configure.store(true, Ordering::Release)
                         },
                         Ok(Message::Reset) => { 
-                            *need_configure.lock().unwrap() = false;
+                            need_configure.store(false, Ordering::Release)
                         },
                         Ok(Message::Quit) => { break; },
                         _ =>  {}
                     }
 
-                    if *need_configure.lock().unwrap() && last_checked_time.elapsed() > idle_configure_timeout {
-                        if event_related(*last_configure_xid.lock().unwrap(), &windows.lock().unwrap()) {
+                    if need_configure.load(Ordering::Acquire) && last_checked_time.elapsed() > idle_configure_timeout {
+                        if event_related(*last_configure_xid.lock().unwrap()) {
                         }
 
                         wm_debug!("timedout, reload");
@@ -412,7 +412,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         assert!(diff.lock().unwrap().contains(&last_configure_xid.lock().unwrap()));
 
                         dump_windows(&windows.lock().unwrap(), filter, &diff.lock().unwrap());
-                        *need_configure.lock().unwrap() = false;
+                        need_configure.store(false, Ordering::Release);
                     }
                 }
 
@@ -420,7 +420,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
         }
 
 
-        let event_related = |ev_win: xcb::Window, windows: &Vec<Window>| windows.iter().any(|ref w| w.id == ev_win);
+        let event_related = |ev_win: xcb::Window| windows.lock().unwrap().iter().any(|ref w| w.id == ev_win);
         loop {
             if let Some(ev) = c.poll_for_event() {
                 match ev.response_type() & !0x80 {
@@ -445,7 +445,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     xcb::xproto::DESTROY_NOTIFY => {
                         let dne = xcb::cast_event::<xcb::DestroyNotifyEvent>(&ev);
 
-                        if event_related(dne.window(), &windows.lock().unwrap()) {
+                        if event_related(dne.window()) {
                             println!("destroy 0x{:x}", dne.window());
                             windows.lock().unwrap().retain(|ref w| w.id != dne.window());
                             {
@@ -461,8 +461,8 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     xcb::xproto::REPARENT_NOTIFY => {
                         let rne = xcb::cast_event::<xcb::ReparentNotifyEvent>(&ev);
 
-                        let mut windows = windows.lock().unwrap();
-                        if event_related(rne.window(), &windows) {
+                        if event_related(rne.window()) {
+                            let mut windows = windows.lock().unwrap();
                             if rne.parent() != screen.root() {
                                 println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
                                 windows.retain(|ref w| w.id != rne.window());
@@ -492,7 +492,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     xproto::CONFIGURE_NOTIFY => {
                         let cne = xcb::cast_event::<xcb::ConfigureNotifyEvent>(&ev);
 
-                        if event_related(cne.window(), &windows.lock().unwrap()) {
+                        if event_related(cne.window()) {
                             if *last_configure_xid.lock().unwrap() != cne.window() {
                                 println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
                                 *windows.lock().unwrap() = collect_windows(&c, filter);
@@ -509,8 +509,8 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     xproto::MAP_NOTIFY => {
                         let mn = xcb::cast_event::<xcb::MapNotifyEvent>(&ev);
 
-                        let mut windows = windows.lock().unwrap();
-                        if event_related(mn.window(), &windows) {
+                        if event_related(mn.window()) {
+                            let mut windows = windows.lock().unwrap();
                             {
                                 let mut win = windows.iter_mut().find(|ref mut w| w.id == mn.window()).unwrap();
                                 win.attrs.map_state = MapState::Viewable;
@@ -528,7 +528,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     xproto::UNMAP_NOTIFY => {
                         let un = xcb::cast_event::<xcb::UnmapNotifyEvent>(&ev);
 
-                        if event_related(un.window(), &windows.lock().unwrap()) {
+                        if event_related(un.window()) {
                             {
                                 let mut locked = windows.lock().unwrap();
                                 let mut win = locked.iter_mut().find(|ref w| w.id == un.window()).unwrap();

@@ -144,6 +144,7 @@ fn wild_match(pat: &str, s: &str) -> bool {
         i == pat.len()
     }
 
+    #[allow(dead_code)]
     fn mat_star(pat: &[char], i: usize, s: &[char], mut j: usize) -> bool {
         while j <= s.len() {
             if mat(pat, i+1, s, j) {
@@ -155,6 +156,7 @@ fn wild_match(pat: &str, s: &str) -> bool {
         false
     }
 
+    #[allow(dead_code)]
     fn mat(pat: &[char], i: usize, s: &[char], j: usize) -> bool {
         if pat.len() == i || s.len() == j {
             return pat.len() == i && s.len() == j;
