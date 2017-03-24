@@ -26,7 +26,7 @@ the grammar is basically like this:
 
 filtering windows
 ```
-any(attrs.map_state=Viewable, all(geom.x>2, geom.w>100))
+any(attrs.map_state=Viewable, all(geom.x>2, geom.width>100))
 ```
 
 id wildcard matching
@@ -52,3 +52,5 @@ not(attrs.map_state=Viewable): pin;
 - [ ] rule databases (based on serialization)
 - [x] cut off long name display 
 - [ ] change rules on the fly (so I can change the set of monitored windows without restart)
+- [ ] xrandr events may affect definition of visible
+- [ ] on macOS, client id should be child of queried window

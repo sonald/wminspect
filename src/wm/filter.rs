@@ -179,7 +179,6 @@ fn wild_match(pat: &str, s: &str) -> bool {
         res = s.contains(pat);
     }
 
-    //wm_debug!("match({}, {})={}", pat, s, res);
     res
 }
 
@@ -592,10 +591,21 @@ fn scan_tokens(rule: String) -> Tokens {
 
             _ => {
                 // scan string literal
+                let compound_str = match ch {
+                    '\'' | '"' => true,
+                    _ => false
+                };
+
                 let mut s = String::new();
-                s.push(ch);
+                if !compound_str { s.push(ch); }
                 loop {
-                    {
+                    if compound_str {
+                        match chars.peek() {
+                            Some(&val) if val != '\'' && val != '"' => {},
+                            _ => break,
+                        }
+
+                    } else {
                         match chars.peek() {
                             //skip special char
                             Some(val) if !metas.contains(val) => {},
@@ -604,6 +614,10 @@ fn scan_tokens(rule: String) -> Tokens {
                     }
 
                     s.push(chars.next().unwrap());
+                }
+
+                if compound_str {
+                    chars.next(); // should be ' | "
                 }
 
                 s = s.trim().to_string();
@@ -766,6 +780,14 @@ mod tests {
         let tokens = scan_tokens("not(name =dde?osd): pin; attrs.map_state=Viewable;".to_string());
         println!("{:?}", tokens);
         assert_eq!(tokens.len(), 16);
+    }
+
+    #[test]
+    fn test_scan_tokens5() {
+        // compound string literal
+        let tokens = scan_tokens("any(name = 'inside, this', name = \"name ; any\"): pin".to_string());
+        println!("{:?}", tokens);
+        assert_eq!(tokens.len(), 13);
     }
 
     #[test]
