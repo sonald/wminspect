@@ -186,6 +186,15 @@ fn is_wild_string(pattern: &str) -> bool {
     pattern.chars().any(|c| c == '?' || c == '*')
 }
 
+fn parse_id(id_str: &str) -> u32 {
+    let id_str = id_str.to_lowercase();
+    if id_str.starts_with("0x") {
+        u32::from_str_radix(&id_str[2..], 16).unwrap_or(0)
+    } else {
+        id_str.parse::<u32>().unwrap_or(0)
+    }
+}
+
 impl Rule for FilterRule {
     fn gen_closure(&self) -> FilterFunction {
         match (&self.pred, &self.op, &self.matcher) {
@@ -203,7 +212,7 @@ impl Rule for FilterRule {
                 if is_wild_string(&id) {
                     Box::new(move |ref w| wild_match(&id, &format!("0x{:x}", w.id)))
                 } else {
-                    let i = id.parse::<u32>().unwrap_or(0);
+                    let i = parse_id(&id);
                     Box::new(move |ref w| w.id == i)
                 }
             },
@@ -538,7 +547,6 @@ fn scan_tokens(rule: String) -> Tokens {
             None => break,
         };
 
-        //wm_debug!("ch = {}", ch); 
         match ch {
             '=' => {
                 append_tok!(tokens, OP(Op::Eq));

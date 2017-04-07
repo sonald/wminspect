@@ -20,6 +20,8 @@ use super::filter::*;
 macro_rules! wm_debug {
     ( $($a:tt)* ) => (
         if cfg!(debug_assertions) {
+            let (f, l) = (file!(), line!());
+            print!("{}:{}: ", f, l);
             println!{$($a)*}; 
         })
 }
@@ -281,10 +283,15 @@ pub fn collect_windows(c: &xcb::Connection, filter: &Filter) -> Vec<Window> {
     };
 
     let mut target_windows = query_windows(&c, &res);
+    wm_debug!("initial total #{}", target_windows.len());
 
     if filter.mapped_only() || filter.omit_hidden() {
         let has_guard_window = target_windows.iter()
             .any(|ref w| w.name.contains("guard window") && w.attrs.override_redirect);
+
+        if has_guard_window {
+            wm_debug!("has guard window, filter out not mapped or hidden");
+        }
 
         do_filter!(target_windows, skip_while, |ref w| {
             if has_guard_window {
