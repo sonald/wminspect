@@ -1,58 +1,42 @@
 //#![feature(core_intrinsics)]
 
 extern crate xcb;
-extern crate getopts;
+extern crate clap;
 
-use std::env;
 use std::collections::HashSet;
+use clap::{Arg, App, SubCommand};
 mod wm;
 
-fn usage(program: &String, opts: &getopts::Options)
-{
-    let brief = format!("Usage: {} [vcmof]", program);
-    println!("{}", opts.usage(&brief));
-}
-
 pub fn main() {
-    let args = env::args().collect::<Vec<String>>();
-    let program = args[0].clone();
-
-    let mut opts = getopts::Options::new();
-    opts.optflag("v", "only-mapped", "show only mapped windows");
-	opts.optflag("c", "colored", "output info with color");
-	opts.optflag("m", "monitor", "run in monitor mode");
-    opts.optopt("f", "filter", "filter rule", "\"RULE EXPR\"");
-	opts.optflag("o", "omit-hidden", "omit hidden windows");
-	opts.optflag("s", "no-special", "ignore special windows");
-	opts.optflag("h", "help", "show this help");
-	opts.optflag("n", "num", "show event sequence count");
-	opts.optflag("d", "diff", "highlight diffs between events");
-
-    let args = match opts.parse(&args) {
-        Ok(m) => m,
-        Err(_) => { usage(&program, &opts); return; },
-    };
-
-    if args.opt_present("h") {
-        usage(&program, &opts);
-        return;
-    }
-
+    let matches = App::new("window manager inspector")
+        .args(&[
+              Arg::with_name("only-mapped").short("v").long("only-mapped").help("show only mapped windows"),
+              Arg::from_usage("-c --colored 'output info with color'"),
+              Arg::from_usage("-m --monitor 'run in monitor mode.'"),
+              Arg::from_usage("-f --filter [rule expr] 'filter rule.'"),
+              Arg::from_usage("-o --omit-hidden 'omit hidden windows'"),
+              Arg::from_usage("-s --no-special 'ignore special windows'"),
+              Arg::from_usage("-n --num 'show event sequence count'"),
+              Arg::from_usage("-d --diff 'highlight diffs between events'"),
+        ])
+        .subcommand(SubCommand::with_name("monitor").about("the same as -m flag"))
+        .get_matches();
+        
     let (c, _) = xcb::Connection::connect(None).unwrap();
     let screen = c.get_setup().roots().next().unwrap();
 
-    let rule = match args.opt_str("f") {
+    let rule = match matches.value_of("f") {
         None => "".to_string(),
-        Some(s) => s
+        Some(s) => s.to_string()
     };
     let mut f = wm::parse_filter(rule);
-    if args.opt_present("v") { f.set_mapped_only(); }
-    if args.opt_present("c") { f.set_colorful(); }
-    if args.opt_present("o") { f.set_omit_hidden(); }
-    if args.opt_present("s") { f.set_no_special(); }
-    if args.opt_present("d") { f.set_show_diff(); }
+    if matches.is_present("v") { f.set_mapped_only(); }
+    if matches.is_present("c") { f.set_colorful(); }
+    if matches.is_present("o") { f.set_omit_hidden(); }
+    if matches.is_present("s") { f.set_no_special(); }
+    if matches.is_present("d") { f.set_show_diff(); }
 
-    if args.opt_present("m") {
+    if matches.is_present("m") {
         wm::monitor(&c, &screen, &f);
     } else {
         let windows = wm::collect_windows(&c, &f);

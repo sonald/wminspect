@@ -1,5 +1,4 @@
 extern crate xcb;
-extern crate getopts;
 extern crate colored;
 extern crate timer;
 extern crate crossbeam;
@@ -360,6 +359,10 @@ macro_rules! hashset {
     })
 }
 
+fn as_event<'r, T>(e: &'r xcb::GenericEvent) -> &'r T {
+    return unsafe { xcb::cast_event::<T>(&e) };
+}
+
 pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
     let c = Arc::new(c);
 
@@ -442,7 +445,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
             if let Some(ev) = c.poll_for_event() {
                 match ev.response_type() & !0x80 {
                     xcb::xproto::CREATE_NOTIFY => {
-                        let cne = xcb::cast_event::<xcb::CreateNotifyEvent>(&ev);
+                        let cne = as_event::<xcb::CreateNotifyEvent>(&ev);
                         if cne.parent() != screen.root() {
                             break;
                         }
@@ -466,7 +469,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                             if diff.is_empty() { &locked } else { &diff });
                     },
                     xcb::xproto::DESTROY_NOTIFY => {
-                        let dne = xcb::cast_event::<xcb::DestroyNotifyEvent>(&ev);
+                        let dne = as_event::<xcb::DestroyNotifyEvent>(&ev);
 
                         if event_related(dne.window()) {
                             println!("destroy 0x{:x}", dne.window());
@@ -482,7 +485,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     },
 
                     xcb::xproto::REPARENT_NOTIFY => {
-                        let rne = xcb::cast_event::<xcb::ReparentNotifyEvent>(&ev);
+                        let rne = as_event::<xcb::ReparentNotifyEvent>(&ev);
 
                         if event_related(rne.window()) {
                             let mut windows = windows.lock().unwrap();
@@ -517,7 +520,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     },
 
                     xproto::CONFIGURE_NOTIFY => {
-                        let cne = xcb::cast_event::<xcb::ConfigureNotifyEvent>(&ev);
+                        let cne = as_event::<xcb::ConfigureNotifyEvent>(&ev);
 
                         if event_related(cne.window()) && event_related(cne.above_sibling()) {
                             if *last_configure_xid.lock().unwrap() != cne.window() {
@@ -548,7 +551,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     },
 
                     xproto::MAP_NOTIFY => {
-                        let mn = xcb::cast_event::<xcb::MapNotifyEvent>(&ev);
+                        let mn = as_event::<xcb::MapNotifyEvent>(&ev);
 
                         if event_related(mn.window()) {
                             let mut windows = windows.lock().unwrap();
@@ -572,7 +575,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     },
 
                     xproto::UNMAP_NOTIFY => {
-                        let un = xcb::cast_event::<xcb::UnmapNotifyEvent>(&ev);
+                        let un = as_event::<xcb::UnmapNotifyEvent>(&ev);
 
                         if event_related(un.window()) {
                             {

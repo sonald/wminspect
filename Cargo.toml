@@ -6,13 +6,12 @@ links = "xcb"
 build = "build.rs"
 
 [dependencies]
-#x11 = "2.12.1"
 libc = "*"
-xcb = {version = "0.7.6", features = ["thread"]}
-getopts = "0.2.*"
+xcb = {version = "0.8.*", features = ["thread"]}
 colored = "1.4"
 timer = "*"
 crossbeam = "*"
 regex = "*"
 lazy_static = "*"
 serde = "*"
+clap = "2.27.*"
