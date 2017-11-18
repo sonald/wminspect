@@ -661,6 +661,28 @@ pub fn parse_filter(rule: String) -> Filter {
     filter
 }
 
+pub fn filter_grammar() ->&'static str {
+    return "grammar:
+    top -> ( item ( ';' item )* )?
+    item -> cond ( ':' action)? 
+    cond -> pred op VAL
+        | ANY '(' cond (',' cond )* ')'
+        | ALL '(' cond (',' cond )* ')'
+        | NOT '(' cond ')'
+    pred -> ID ('.' ID)*
+    op -> '=' | '>' | '<' | '>=' | '<=' | '<>'
+    action -> 'filter' | 'pin'
+    ID -> STRING_LIT
+    VAL -> STRING_LIT
+    
+pred could be:
+    attrs.(map_state|override_redirect)
+    geom.(x|y|width|height)
+    id
+    name
+";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

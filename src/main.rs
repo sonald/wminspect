@@ -19,10 +19,16 @@ pub fn main() {
               Arg::from_usage("-s --no-special 'ignore special windows'"),
               Arg::from_usage("-n --num 'show event sequence count'"),
               Arg::from_usage("-d --diff 'highlight diffs between events'"),
+              Arg::from_usage("--show-grammar 'show detailed grammar for filter rule'"),
         ])
         .subcommand(SubCommand::with_name("monitor").about("the same as -m flag"))
         .get_matches();
-        
+
+    if matches.is_present("show-grammar") {
+        println!("{}", wm::filter_grammar());
+        return;
+    }
+
     let (c, _) = xcb::Connection::connect(None).unwrap();
     let screen = c.get_setup().roots().next().unwrap();
 
@@ -37,7 +43,7 @@ pub fn main() {
     if matches.is_present("s") { f.set_no_special(); }
     if matches.is_present("d") { f.set_show_diff(); }
 
-    if matches.is_present("m") {
+    if matches.is_present("m") || matches.subcommand_matches("monitor").is_some(){
         wm::monitor(&c, &screen, &f);
     } else {
         let windows = wm::collect_windows(&c, &f);

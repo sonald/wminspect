@@ -54,3 +54,4 @@ not(attrs.map_state=Viewable): pin;
 - [ ] change rules on the fly (so I can change the set of monitored windows without restart)
 - [ ] xrandr events may affect definition of visible
 - [ ] on macOS, client id should be child of queried window
+- [ ] query_tree is heavy, need to cache window stack like mutter does
