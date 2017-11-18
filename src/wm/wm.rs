@@ -15,24 +15,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::filter::*;
-
-macro_rules! wm_debug {
-    ( $($a:tt)* ) => (
-        if cfg!(debug_assertions) {
-            let (f, l) = (file!(), line!());
-            print!("{}:{}: ", f, l);
-            println!{$($a)*}; 
-        })
-}
-
-#[cfg(feature = "core_intrinsics")]
-fn print_type_of<T>(_: &T) {
-    wm_debug!("{}", unsafe { std::intrinsics::type_name::<T>() });
-}
-
-#[cfg(not(feature = "core_intrinsics"))]
-fn print_type_of<T>(_: &T) {
-}
+use super::macros::print_type_of;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Geometry<T> where T: Copy {
@@ -313,11 +296,12 @@ pub fn collect_windows(c: &xcb::Connection, filter: &Filter) -> Vec<Window> {
     }
 
     if filter.no_special() {
-        let mut specials = HashSet::new();
-        specials.insert("mutter guard window");
-        specials.insert("deepin-metacity guard window");
-        specials.insert("mutter topleft corner window");
-        specials.insert("deepin-metacity topleft corner window");
+        let specials = hashset!(
+            ("mutter guard window"),
+            ("deepin-metacity guard window"),
+            ("mutter topleft corner window"),
+            ("deepin-metacity topleft corner window"),
+        );
         do_filter!(target_windows, filter, |w: &Window| { !specials.contains(w.name.as_str()) });
     }
 
@@ -349,14 +333,6 @@ pub enum Message {
     TimeoutEvent,
     Reset,
     Quit,
-}
-
-macro_rules! hashset {
-    ( $( $e:expr )* ) => ({
-        let mut h = HashSet::new();
-        $( h.insert($e); )*
-        h
-    })
 }
 
 fn as_event<'r, T>(e: &'r xcb::GenericEvent) -> &'r T {
@@ -559,7 +535,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                             let mut locked = pins.lock().unwrap();
 
                             {
-                                let mut win = windows.iter_mut().find(|ref mut w| w.id == mn.window()).unwrap();
+                                let win = windows.iter_mut().find(|ref mut w| w.id == mn.window()).unwrap();
                                 win.attrs.map_state = MapState::Viewable;
                                 println!("map 0x{:x}", mn.window());
 
@@ -580,7 +556,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         if event_related(un.window()) {
                             {
                                 let mut locked = windows.lock().unwrap();
-                                let mut win = locked.iter_mut().find(|ref w| w.id == un.window()).unwrap();
+                                let win = locked.iter_mut().find(|ref w| w.id == un.window()).unwrap();
                                 win.attrs.map_state = MapState::Unmapped;
                             }
                             println!("unmap 0x{:x}", un.window());

@@ -15,6 +15,7 @@ pub fn main() {
               Arg::from_usage("-m --monitor 'run in monitor mode.'"),
               Arg::from_usage("-f --filter [rule expr] 'filter rule.'"),
               Arg::from_usage("-o --omit-hidden 'omit hidden windows'"),
+              Arg::from_usage("-O --no-override-redirect 'ignore override-redirect windows'"),
               Arg::from_usage("-s --no-special 'ignore special windows'"),
               Arg::from_usage("-n --num 'show event sequence count'"),
               Arg::from_usage("-d --diff 'highlight diffs between events'"),
