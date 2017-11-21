@@ -32,18 +32,18 @@ pub fn main() {
     let (c, _) = xcb::Connection::connect(None).unwrap();
     let screen = c.get_setup().roots().next().unwrap();
 
-    let rule = match matches.value_of("f") {
+    let rule = match matches.value_of("filter") {
         None => "".to_string(),
         Some(s) => s.to_string()
     };
     let mut f = wm::parse_filter(rule);
-    if matches.is_present("v") { f.set_mapped_only(); }
-    if matches.is_present("c") { f.set_colorful(); }
-    if matches.is_present("o") { f.set_omit_hidden(); }
-    if matches.is_present("s") { f.set_no_special(); }
-    if matches.is_present("d") { f.set_show_diff(); }
+    if matches.is_present("only-mapped") { f.set_mapped_only(); }
+    if matches.is_present("colored") { f.set_colorful(); }
+    if matches.is_present("omit-hidden") { f.set_omit_hidden(); }
+    if matches.is_present("no-special") { f.set_no_special(); }
+    if matches.is_present("diff") { f.set_show_diff(); }
 
-    if matches.is_present("m") || matches.subcommand_matches("monitor").is_some(){
+    if matches.is_present("monitor") || matches.subcommand_matches("monitor").is_some(){
         wm::monitor(&c, &screen, &f);
     } else {
         let windows = wm::collect_windows(&c, &f);
