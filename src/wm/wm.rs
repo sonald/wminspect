@@ -32,7 +32,7 @@ impl<T> Display for Geometry<T> where T: Display + Copy {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub enum MapState {
     Unmapped,
     Viewable,

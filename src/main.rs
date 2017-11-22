@@ -3,6 +3,11 @@
 extern crate xcb;
 extern crate clap;
 
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+
+
 use std::collections::HashSet;
 use clap::{Arg, App, SubCommand};
 mod wm;

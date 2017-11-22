@@ -1,6 +1,10 @@
+extern crate serde_json;
+
 use super::wm::*;
 use std::fmt::Debug;
 use std::collections::HashSet;
+
+use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone)]
 enum Condition {
@@ -51,13 +55,13 @@ impl Filter {
 }
 
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Action {
     FilterOut,
     Pin,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 enum Predicate {
     Id,
     Name,
@@ -65,7 +69,7 @@ enum Predicate {
     Geom(String), // String contains attr name (x,y,width,height)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 enum Matcher {
     IntegralValue(i32),
     BoolValue(bool),
@@ -73,7 +77,7 @@ enum Matcher {
     Wildcard(String), // all string values are considered wildcard matcher
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 enum Op {
     Eq,
     Neq,
@@ -97,7 +101,7 @@ struct FilterItem {
 }
 
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct FilterRule {
     pred: Predicate,
     op: Op,
@@ -193,7 +197,7 @@ fn parse_id(id_str: &str) -> u32 {
     } else {
         id_str.parse::<u32>().unwrap_or(0)
     }
-}
+} 
 
 impl Rule for FilterRule {
     fn gen_closure(&self) -> FilterFunction {
@@ -870,6 +874,31 @@ mod tests {
     #[test]
     fn test_whole() {
         let filter = parse_filter("name = dde*;".to_string());
+    }
+
+    #[test]
+    fn test_store1() {
+        let act = Action::FilterOut; 
+        let serialized = serde_json::to_string(&act).unwrap();
+        println!("serialized = {}", serialized);
+        let act2 = serde_json::from_str::<Action>(&serialized).unwrap();
+        assert_eq!(act, act2);
+
+
+        let act = Action::Pin; 
+        let serialized = serde_json::to_string(&act).unwrap();
+        println!("serialized = {}", serialized);
+        let act2 = serde_json::from_str::<Action>(&serialized).unwrap();
+        assert_eq!(act, act2);
+    }
+
+    #[test]
+    fn test_store2() {
+        //let mut tokens = scan_tokens("name = dde*;".to_string());
+        //if let Some(top) = parse_rule(&mut tokens) {
+            //let serialized = serde_json::to_string(&top).unwrap();
+            //println!("serialized = {}", serialized);
+        //}
     }
 
     //#[test]
