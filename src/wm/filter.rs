@@ -4,7 +4,10 @@ use super::wm::*;
 use std::fmt::Debug;
 use std::collections::HashSet;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize};
+use erased_serde::{Serialize};
+use erased_serde::{Serializer, Deserializer};
+use erased_serde::deserialize;
 
 #[derive(Debug, Clone)]
 enum Condition {
@@ -88,13 +91,15 @@ enum Op {
 }
 
 // marker
-trait Rule : Debug { 
+trait Rule : Serialize + Debug { 
     fn gen_closure(&self) -> FilterFunction;
 }
 
 type BoxedRule = Box<Rule + Send>;
 
-#[derive(Debug)]
+serialize_trait_object!(Rule);
+
+#[derive(Serialize, Debug)]
 struct FilterItem {
     action: Action,
     rule: BoxedRule,
@@ -108,17 +113,17 @@ struct FilterRule {
     matcher: Matcher
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
 struct All {
     rules: Vec<BoxedRule>
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
 struct Any {
     rules: Vec<BoxedRule>
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
 struct Not {
     rule: BoxedRule
 }
@@ -894,11 +899,21 @@ mod tests {
 
     #[test]
     fn test_store2() {
-        //let mut tokens = scan_tokens("name = dde*;".to_string());
-        //if let Some(top) = parse_rule(&mut tokens) {
-            //let serialized = serde_json::to_string(&top).unwrap();
-            //println!("serialized = {}", serialized);
-        //}
+        use std::collections::HashMap;
+        use std::io;
+        let mut tokens = scan_tokens("name = dde*;".to_string());
+        if let Some(top) = parse_rule(&mut tokens) {
+            let serialized = serde_json::to_string(&top).unwrap();
+            println!("serialized = {}", serialized);
+
+            //let json = &mut serde_json::de::Deserializer::from_slice(serialized.as_bytes());
+            //let mut format = Deserializer::erase(json);
+            //let top2: Vec<FilterItem> = deserialize(&mut format).unwrap();
+
+            //let act2 = serde_json::from_str::<Action>(&serialized).unwrap();
+            //println!("deserialized = {:?}", &act2);
+            //assert_eq!(top, act2);
+        }
     }
 
     //#[test]
