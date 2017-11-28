@@ -1,13 +1,13 @@
+extern crate serde;
 extern crate serde_json;
 
 use super::wm::*;
 use std::fmt::Debug;
 use std::collections::HashSet;
 
-use serde::{Deserialize};
-use erased_serde::{Serialize};
-use erased_serde::{Serializer, Deserializer};
-use erased_serde::deserialize;
+use std::fmt;
+use serde::de::{SeqAccess, MapAccess, Visitor};
+use erased_serde::{Serialize, Serializer, Deserializer ,deserialize ,Error};
 
 #[derive(Debug, Clone)]
 enum Condition {
@@ -91,11 +91,11 @@ enum Op {
 }
 
 // marker
-trait Rule : Serialize + Debug { 
+trait Rule : Serialize + Debug + Send { 
     fn gen_closure(&self) -> FilterFunction;
 }
 
-type BoxedRule = Box<Rule + Send>;
+type BoxedRule = Box<Rule>;
 
 serialize_trait_object!(Rule);
 
@@ -105,6 +105,66 @@ struct FilterItem {
     rule: BoxedRule,
 }
 
+impl<'de> serde::Deserialize<'de> for FilterItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field { Action, Rule };
+
+        struct FilterItemVisitor;
+
+        impl<'de> Visitor<'de> for FilterItemVisitor {
+            type Value = FilterItem;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct FilterItem")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<FilterItem, V::Error> where V: SeqAccess<'de> {
+                    let act = seq.next_element()?
+                        .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                    let rule = seq.next_element()?
+                        .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                    Ok(FilterItem {action: act, rule: (rule)})
+                }
+
+            fn visit_map<V>(self, mut map: V) -> Result<FilterItem, V::Error> where V: MapAccess<'de> {
+                let mut action = None;
+                let mut rule = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Action => {
+                            if action.is_some() {
+                                return Err(serde::de::Error::duplicate_field("action"));
+                            }
+                            action = Some(map.next_value()?);
+                        }
+                        Field::Rule => {
+                            if rule.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rule"));
+                            }
+                            rule = Some(map.next_value()?);
+                        }
+                    }
+                }
+                let action = action.ok_or_else(|| serde::de::Error::missing_field("action"))?;
+                let boxed_rule = rule.ok_or_else(|| serde::de::Error::missing_field("rule"))?;
+                Ok(FilterItem {action: action, rule: boxed_rule})
+            }
+        }
+
+        const FIELDS: &'static [&'static str] = &["action", "rule"];
+        deserializer.deserialize_struct("FilterItem", FIELDS, FilterItemVisitor)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BoxedRule {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
+        deserialize(&mut Deserializer::erase(deserializer)).map_err(|err| {
+            serde::de::Error::custom(err.to_string())
+        })
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct FilterRule {
@@ -113,17 +173,60 @@ struct FilterRule {
     matcher: Matcher
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct All {
     rules: Vec<BoxedRule>
 }
 
-#[derive(Serialize, Debug)]
+//impl<'de> serde::Deserialize<'de> for All {
+    //fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
+        //#[derive(Deserialize)]
+        //#[serde(field_identifier, rename_all = "lowercase")]
+        //enum Field { Rules };
+
+        //struct AllVisitor;
+
+        //impl<'de> Visitor<'de> for AllVisitor {
+            //type Value = All;
+
+            //fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                //formatter.write_str("struct All")
+            //}
+
+            //fn visit_seq<V>(self, mut seq: V) -> Result<All, V::Error> where V: SeqAccess<'de> {
+                    //let rules = seq.next_element()?
+                        //.ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                    //Ok(All {rules: rules})
+                //}
+
+            //fn visit_map<V>(self, mut map: V) -> Result<All, V::Error> where V: MapAccess<'de> {
+                //let mut rules = None;
+                //while let Some(key) = map.next_key()? {
+                    //match key {
+                        //Field::Rules => {
+                            //if rules.is_some() {
+                                //return Err(serde::de::Error::duplicate_field("rules"));
+                            //}
+                            //rules = Some(map.next_value()?);
+                        //}
+                    //}
+                //}
+                //let rules = rules.ok_or_else(|| serde::de::Error::missing_field("rules"))?;
+                //Ok(All {rules: rules})
+            //}
+        //}
+
+        //const FIELDS: &'static [&'static str] = &["rules"];
+        //deserializer.deserialize_struct("All", FIELDS, AllVisitor)
+    //}
+//}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct Any {
     rules: Vec<BoxedRule>
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Not {
     rule: BoxedRule
 }
@@ -895,12 +998,16 @@ mod tests {
         println!("serialized = {}", serialized);
         let act2 = serde_json::from_str::<Action>(&serialized).unwrap();
         assert_eq!(act, act2);
+
+        let mut tokens = scan_tokens("all(name = dde*, geom.x > 100);".to_string());
+        if let Some(top) = parse_rule(&mut tokens) {
+            let serialized = serde_json::to_string(&top).unwrap();
+            println!("serialized = {}", serialized);
+        }
     }
 
     #[test]
     fn test_store2() {
-        use std::collections::HashMap;
-        use std::io;
         let mut tokens = scan_tokens("name = dde*;".to_string());
         if let Some(top) = parse_rule(&mut tokens) {
             let serialized = serde_json::to_string(&top).unwrap();
@@ -910,8 +1017,25 @@ mod tests {
             //let mut format = Deserializer::erase(json);
             //let top2: Vec<FilterItem> = deserialize(&mut format).unwrap();
 
-            //let act2 = serde_json::from_str::<Action>(&serialized).unwrap();
-            //println!("deserialized = {:?}", &act2);
+            let act2 = serde_json::from_str::<Vec<FilterItem>>(&serialized).unwrap();
+            println!("deserialized = {:?}", &act2);
+            //assert_eq!(top, act2);
+        }
+    }
+
+    #[test]
+    fn test_store3() {
+        let mut tokens = scan_tokens("all(name = dde*, geom.x > 100);".to_string());
+        if let Some(top) = parse_rule(&mut tokens) {
+            let serialized = serde_json::to_string(&top).unwrap();
+            println!("serialized = {}", serialized);
+
+            //let json = &mut serde_json::de::Deserializer::from_slice(serialized.as_bytes());
+            //let mut format = Deserializer::erase(json);
+            //let top2: Vec<FilterItem> = deserialize(&mut format).unwrap();
+
+            let act2 = serde_json::from_str::<Vec<FilterItem>>(&serialized).unwrap();
+            println!("deserialized = {:?}", &act2);
             //assert_eq!(top, act2);
         }
     }
