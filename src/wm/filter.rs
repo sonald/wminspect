@@ -90,147 +90,24 @@ enum Op {
     LE,
 }
 
-// marker
-trait Rule : Serialize + Debug + Send { 
-    fn gen_closure(&self) -> FilterFunction;
+#[derive(Serialize, Deserialize, Debug)]
+enum FilterRule {
+    //None,
+    Single { pred: Predicate, op: Op, matcher: Matcher },
+    All (Vec<Box<FilterRule>>),
+    Any (Vec<Box<FilterRule>>),
+    Not (Box<FilterRule>)
 }
 
-type BoxedRule = Box<Rule>;
-
-serialize_trait_object!(Rule);
+//serialize_trait_object!(Rule);
 
 #[derive(Serialize, Debug)]
 struct FilterItem {
     action: Action,
-    rule: BoxedRule,
+    rule: FilterRule,
 }
 
-impl<'de> serde::Deserialize<'de> for FilterItem {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
-        #[derive(Deserialize)]
-        #[serde(field_identifier, rename_all = "lowercase")]
-        enum Field { Action, Rule };
-
-        struct FilterItemVisitor;
-
-        impl<'de> Visitor<'de> for FilterItemVisitor {
-            type Value = FilterItem;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("struct FilterItem")
-            }
-
-            fn visit_seq<V>(self, mut seq: V) -> Result<FilterItem, V::Error> where V: SeqAccess<'de> {
-                    let act = seq.next_element()?
-                        .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-                    let rule = seq.next_element()?
-                        .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
-                    Ok(FilterItem {action: act, rule: (rule)})
-                }
-
-            fn visit_map<V>(self, mut map: V) -> Result<FilterItem, V::Error> where V: MapAccess<'de> {
-                let mut action = None;
-                let mut rule = None;
-                while let Some(key) = map.next_key()? {
-                    match key {
-                        Field::Action => {
-                            if action.is_some() {
-                                return Err(serde::de::Error::duplicate_field("action"));
-                            }
-                            action = Some(map.next_value()?);
-                        }
-                        Field::Rule => {
-                            if rule.is_some() {
-                                return Err(serde::de::Error::duplicate_field("rule"));
-                            }
-                            rule = Some(map.next_value()?);
-                        }
-                    }
-                }
-                let action = action.ok_or_else(|| serde::de::Error::missing_field("action"))?;
-                let boxed_rule = rule.ok_or_else(|| serde::de::Error::missing_field("rule"))?;
-                Ok(FilterItem {action: action, rule: boxed_rule})
-            }
-        }
-
-        const FIELDS: &'static [&'static str] = &["action", "rule"];
-        deserializer.deserialize_struct("FilterItem", FIELDS, FilterItemVisitor)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for BoxedRule {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
-        deserialize(&mut Deserializer::erase(deserializer)).map_err(|err| {
-            serde::de::Error::custom(err.to_string())
-        })
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct FilterRule {
-    pred: Predicate,
-    op: Op,
-    matcher: Matcher
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct All {
-    rules: Vec<BoxedRule>
-}
-
-//impl<'de> serde::Deserialize<'de> for All {
-    //fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
-        //#[derive(Deserialize)]
-        //#[serde(field_identifier, rename_all = "lowercase")]
-        //enum Field { Rules };
-
-        //struct AllVisitor;
-
-        //impl<'de> Visitor<'de> for AllVisitor {
-            //type Value = All;
-
-            //fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                //formatter.write_str("struct All")
-            //}
-
-            //fn visit_seq<V>(self, mut seq: V) -> Result<All, V::Error> where V: SeqAccess<'de> {
-                    //let rules = seq.next_element()?
-                        //.ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-                    //Ok(All {rules: rules})
-                //}
-
-            //fn visit_map<V>(self, mut map: V) -> Result<All, V::Error> where V: MapAccess<'de> {
-                //let mut rules = None;
-                //while let Some(key) = map.next_key()? {
-                    //match key {
-                        //Field::Rules => {
-                            //if rules.is_some() {
-                                //return Err(serde::de::Error::duplicate_field("rules"));
-                            //}
-                            //rules = Some(map.next_value()?);
-                        //}
-                    //}
-                //}
-                //let rules = rules.ok_or_else(|| serde::de::Error::missing_field("rules"))?;
-                //Ok(All {rules: rules})
-            //}
-        //}
-
-        //const FIELDS: &'static [&'static str] = &["rules"];
-        //deserializer.deserialize_struct("All", FIELDS, AllVisitor)
-    //}
-//}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Any {
-    rules: Vec<BoxedRule>
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Not {
-    rule: BoxedRule
-}
-
+type BoxedRule = Box<FilterRule>;
 
 fn wild_match(pat: &str, s: &str) -> bool {
     // non recursive algorithm
@@ -307,9 +184,58 @@ fn parse_id(id_str: &str) -> u32 {
     }
 } 
 
-impl Rule for FilterRule {
+impl FilterRule {
     fn gen_closure(&self) -> FilterFunction {
-        match (&self.pred, &self.op, &self.matcher) {
+        match self {
+            &FilterRule::Single {ref pred, ref op, ref matcher} => 
+                FilterRule::single_gen_closure(pred, op, matcher),
+            &FilterRule::All (ref rules) => FilterRule::all_gen_closure(rules),
+            &FilterRule::Any (ref rules) => FilterRule::any_gen_closure(rules),
+            &FilterRule::Not (ref rule) => FilterRule::not_gen_closure(rule)
+        }
+    }
+
+    fn any_gen_closure(rules: &Vec<BoxedRule>) -> FilterFunction {
+        let mut closures = Vec::new();
+        for r in rules {
+            closures.push(r.gen_closure())
+        }
+
+        Box::new(move |ref w| {
+            for f in &closures {
+                if f(w) {
+                    return true;
+                }
+            }
+
+            false
+        })
+    }
+
+    fn not_gen_closure(rule: &BoxedRule) -> FilterFunction {
+        let f = rule.gen_closure();
+        Box::new(move |ref w| !f(w))
+    }
+
+    fn all_gen_closure(rules: &Vec<BoxedRule>) -> FilterFunction {
+        let mut closures = Vec::new();
+        for r in rules {
+            closures.push(r.gen_closure())
+        }
+
+        Box::new(move |ref w| {
+            for f in &closures {
+                if !f(w) {
+                    return false;
+                }
+            }
+
+            true
+        })
+    }
+
+    fn single_gen_closure(pred: &Predicate, op: &Op, matcher: &Matcher) -> FilterFunction {
+        match (pred, op, matcher) {
             (&Predicate::Name, op, &Matcher::Wildcard(ref pat)) => {
                 let pat = pat.clone();
                 match *op {
@@ -395,51 +321,6 @@ impl Rule for FilterRule {
                 panic!("not implement"); 
             }
         }
-    }
-}
-
-impl Rule for All { 
-    fn gen_closure(&self) -> FilterFunction {
-        let mut closures = Vec::new();
-        for r in &self.rules {
-            closures.push(r.gen_closure())
-        }
-
-        Box::new(move |ref w| {
-            for f in &closures {
-                if !f(w) {
-                    return false;
-                }
-            }
-
-            true
-        })
-    }
-}
-
-impl Rule for Any {
-    fn gen_closure(&self) -> FilterFunction {
-        let mut closures = Vec::new();
-        for r in &self.rules {
-            closures.push(r.gen_closure())
-        }
-
-        Box::new(move |ref w| {
-            for f in &closures {
-                if f(w) {
-                    return true;
-                }
-            }
-
-            false
-        })
-    }
-}
-
-impl Rule for Not { 
-    fn gen_closure(&self) -> FilterFunction {
-        let f = self.rule.gen_closure();
-        Box::new(move |ref w| !f(w))
     }
 }
 
@@ -532,7 +413,7 @@ macro_rules! match_tok {
     )
 }
 
-fn parse_cond(tokens: &mut Tokens) -> Option<BoxedRule> {
+fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
     use self::Token::*;
 
     let tk = tokens.pop_front().unwrap();
@@ -593,11 +474,11 @@ fn parse_cond(tokens: &mut Tokens) -> Option<BoxedRule> {
                         Predicate::Geom(_) => Matcher::IntegralValue(s.parse::<i32>().unwrap_or(0))
                     };
 
-                    Some(Box::new(FilterRule {
+                    Some(FilterRule::Single {
                         pred: pred,
                         op: op.clone(),
                         matcher: matcher
-                    }))
+                    })
                 }, 
 
                 _ => {
@@ -611,7 +492,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<BoxedRule> {
             match_tok!(tokens, LBRACE);
             let mut rules = Vec::new();
             while let Some(cond) = parse_cond(tokens) {
-                rules.push(cond);
+                rules.push(Box::new(cond));
                 // pop ',' or ')' anyway
                 let tk = tokens.pop_front().unwrap();
                 if tk == RBRACE {
@@ -620,9 +501,9 @@ fn parse_cond(tokens: &mut Tokens) -> Option<BoxedRule> {
             }
 
             if tk == ANY {
-                Some(Box::new(Any {rules: rules}))
+                Some(FilterRule::Any(rules))
             } else {
-                Some(Box::new(All {rules: rules}))
+                Some(FilterRule::All(rules))
             }
         },
 
@@ -630,7 +511,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<BoxedRule> {
             match_tok!(tokens, LBRACE);
             if let Some(cond) = parse_cond(tokens) {
                 match_tok!(tokens, RBRACE);
-                Some(Box::new(Not {rule: cond})) //FIXME: assert only one rule included 
+                Some(FilterRule::Not(Box::new(cond))) //FIXME: assert only one rule included 
             } else {
                 None
             }
@@ -984,6 +865,7 @@ mod tests {
         let filter = parse_filter("name = dde*;".to_string());
     }
 
+    /*
     #[test]
     fn test_store1() {
         let act = Action::FilterOut; 
@@ -1039,9 +921,5 @@ mod tests {
             //assert_eq!(top, act2);
         }
     }
-
-    //#[test]
-    //fn test_whole2() {
-        //let filter = parse_filter("any(name =dde?osd*, all(geom.x > 2, geom.width < 500));".to_string());
-    //}
+    */
 }
