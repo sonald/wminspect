@@ -2,12 +2,7 @@ extern crate serde;
 extern crate serde_json;
 
 use super::wm::*;
-use std::fmt::Debug;
 use std::collections::HashSet;
-
-use std::fmt;
-use serde::de::{SeqAccess, MapAccess, Visitor};
-use erased_serde::{Serialize, Serializer, Deserializer ,deserialize ,Error};
 
 #[derive(Debug, Clone)]
 enum Condition {
@@ -64,7 +59,7 @@ pub enum Action {
     Pin,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 enum Predicate {
     Id,
     Name,
@@ -72,7 +67,7 @@ enum Predicate {
     Geom(String), // String contains attr name (x,y,width,height)
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 enum Matcher {
     IntegralValue(i32),
     BoolValue(bool),
@@ -90,7 +85,7 @@ enum Op {
     LE,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 enum FilterRule {
     //None,
     Single { pred: Predicate, op: Op, matcher: Matcher },
@@ -99,9 +94,7 @@ enum FilterRule {
     Not (Box<FilterRule>)
 }
 
-//serialize_trait_object!(Rule);
-
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 struct FilterItem {
     action: Action,
     rule: FilterRule,
@@ -865,7 +858,6 @@ mod tests {
         let filter = parse_filter("name = dde*;".to_string());
     }
 
-    /*
     #[test]
     fn test_store1() {
         let act = Action::FilterOut; 
@@ -901,25 +893,25 @@ mod tests {
 
             let act2 = serde_json::from_str::<Vec<FilterItem>>(&serialized).unwrap();
             println!("deserialized = {:?}", &act2);
-            //assert_eq!(top, act2);
+            assert_eq!(top, act2);
         }
     }
 
     #[test]
     fn test_store3() {
-        let mut tokens = scan_tokens("all(name = dde*, geom.x > 100);".to_string());
+        let r = r#"
+        any(all(geom.x > 0, geom.y > 0), 
+            all(name = dde*, geom.x > 100)): filter;
+        not(attr.map_state == unmapped)
+        "#;
+        let mut tokens = scan_tokens(r.to_string());
         if let Some(top) = parse_rule(&mut tokens) {
             let serialized = serde_json::to_string(&top).unwrap();
             println!("serialized = {}", serialized);
 
-            //let json = &mut serde_json::de::Deserializer::from_slice(serialized.as_bytes());
-            //let mut format = Deserializer::erase(json);
-            //let top2: Vec<FilterItem> = deserialize(&mut format).unwrap();
-
             let act2 = serde_json::from_str::<Vec<FilterItem>>(&serialized).unwrap();
             println!("deserialized = {:?}", &act2);
-            //assert_eq!(top, act2);
+            assert_eq!(top, act2);
         }
     }
-    */
 }
