@@ -30,7 +30,6 @@ pub fn print_type_of<T>(_: &T) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::str;
 
     #[test]

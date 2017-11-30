@@ -1,8 +1,16 @@
 extern crate serde;
 extern crate serde_json;
+extern crate bincode as bc;
 
 use super::wm::*;
 use std::collections::HashSet;
+use std::convert::AsRef;
+use std::path::*;
+use std::fs::File;
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStrExt;
+
+//use bincode::{serialize, deserialize, Infinite};
 
 #[derive(Debug, Clone)]
 enum Condition {
@@ -50,6 +58,91 @@ impl Filter {
     build_fun!(omit_hidden, set_omit_hidden, OmitHidden);
     build_fun!(no_special, set_no_special, NoSpecial);
     build_fun!(show_diff, set_show_diff, ShowDiff);
+
+    pub fn extend_with<S: AsRef<str>>(&mut self, rule: S) -> &mut Self {
+        let mut tokens = scan_tokens(rule);
+        if let Some(items) = parse_rule(&mut tokens) {
+            let mut items = items.into_iter()
+                .map(|item| ActionFuncPair {action: item.action, func: item.rule.gen_closure()})
+                .collect();
+            self.rules.append(&mut items);
+        }
+
+        self
+    }
+
+
+    /// Load sheets from disk at `path`
+    /// sheet may be in any of three forms: unparsed form with ext .rule,
+    /// two serialized forms: .json and .bin
+    ///
+    pub fn load_sheet<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        use std::io::Read;
+
+        #[inline]
+        fn load_action_pairs<S: AsRef<str>>(rule: S) -> Option<Vec<FilterItem>> {
+            let mut tokens = scan_tokens(rule);
+            parse_rule(&mut tokens)
+        }
+
+        #[inline]
+        fn load_bin_form(data: &str) -> Option<Vec<FilterItem>> {
+            wm_debug!("load_bin_form");
+            bc::deserialize_from(&mut data.as_bytes(), bc::Infinite).ok()
+        }
+
+        #[inline]
+        fn load_json_form(data: &str) -> Option<Vec<FilterItem>> {
+            wm_debug!("load_json_form");
+            serde_json::from_str::<Vec<FilterItem>>(data).ok()
+        }
+
+        let ext: OsString = match path.as_ref().extension() {
+            Some(ext) => OsString::from(ext),
+            None => return self
+        };
+
+        if let Ok(mut f) = File::open(path) {
+            let mut data = String::new();
+            if let Err(_) = f.read_to_string(&mut data) {
+                return self;
+            }
+
+            if let Some(items) = match ext.as_bytes() {
+                b"json" => load_json_form(&data),
+                    b"bin" => load_bin_form(&data),
+                    b"rule" => load_action_pairs(&data),
+                    _ => None
+            } {
+                let mut items = items.into_iter()
+                    .map(|item| ActionFuncPair {action: item.action, func: item.rule.gen_closure()})
+                    .collect();
+                self.rules.append(&mut items);
+            }
+        }
+
+        self
+    }
+
+    /// constructors
+    pub fn new() -> Filter {
+        Filter { options: Vec::new(), rules: Vec::new(), }
+    }
+
+    pub fn parse<S: AsRef<str>>(rule: S) -> Filter {
+        let mut filter = Filter { options: Vec::new(), rules: Vec::new(), };
+
+        let mut tokens = scan_tokens(rule);
+        if let Some(top) = parse_rule(&mut tokens) {
+            for item in top.iter() {
+                wm_debug!("item: {:?}", item);
+                filter.rules.push(ActionFuncPair {action: item.action, func: item.rule.gen_closure()});
+            }
+        }
+
+        filter
+    }
+
 }
 
 
@@ -513,7 +606,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
     }
 }
 
-fn scan_tokens(rule: String) -> Tokens {
+fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
     use self::Token::*;
     macro_rules! append_tok {
         ($tokens:tt, $tk:expr) => ({
@@ -523,7 +616,7 @@ fn scan_tokens(rule: String) -> Tokens {
     }
 
     let mut tokens = Tokens::new();
-    let mut chars = rule.chars().peekable();
+    let mut chars = rule.as_ref().chars().peekable();
     let metas: HashSet<_> = ['.', ',', ';', ':', '(', ')', '<', '>', '='].iter().cloned().collect();
     let mut need_act = false;
 
@@ -631,20 +724,6 @@ fn scan_tokens(rule: String) -> Tokens {
 
     append_tok!(tokens, EOT);
     tokens
-}
-
-pub fn parse_filter(rule: String) -> Filter {
-    let mut filter = Filter { options: Vec::new(), rules: Vec::new(), };
-    
-    let mut tokens = scan_tokens(rule);
-    if let Some(top) = parse_rule(&mut tokens) {
-        for item in top.iter() {
-            wm_debug!("item: {:?}", item);
-            filter.rules.push(ActionFuncPair {action: item.action, func: item.rule.gen_closure()});
-        }
-    }
-
-    filter
 }
 
 pub fn filter_grammar() ->&'static str {
@@ -849,13 +928,10 @@ mod tests {
     }
 
     #[test]
-    fn test_rule_closure() {
-        let f = parse_filter("name = *dde*;".to_string());
-    }
-
-    #[test]
     fn test_whole() {
-        let filter = parse_filter("name = dde*;".to_string());
+        let mut filter = Filter::new();
+        filter.extend_with("name = dde*;".to_string());
+        assert_eq!(filter.rules.len(), 1);
     }
 
     #[test]
@@ -913,5 +989,13 @@ mod tests {
             println!("deserialized = {:?}", &act2);
             assert_eq!(top, act2);
         }
+    }
+
+    #[test]
+    fn test_load_sheet1() {
+        let mut f = Filter::new();
+        let p = Path::new("/home/sonald/test.json");
+        f.load_sheet(p);
+        assert_eq!(f.rules.len(), 1);
     }
 }
