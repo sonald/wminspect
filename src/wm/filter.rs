@@ -10,8 +10,6 @@ use std::fs::File;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
 
-//use bincode::{serialize, deserialize, Infinite};
-
 #[derive(Debug, Clone)]
 enum Condition {
     Colorful,
@@ -34,6 +32,7 @@ pub struct Filter {
         
 }
 
+/// this is probably wrong, but I use filter as read-only after built-up.
 unsafe impl Sync for Filter {}
 
 macro_rules! build_fun {
@@ -52,6 +51,18 @@ macro_rules! build_fun {
         })
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum SheetFormat {
+    Invalid,
+    /// plain unparsed rule 
+    Plain,
+    /// serialized json format
+    Json,
+    /// serialized bincode format
+    Binary
+}
+
+
 impl Filter {
     build_fun!(mapped_only, set_mapped_only, MappedOnly);
     build_fun!(colorful, set_colorful, Colorful);
@@ -59,26 +70,8 @@ impl Filter {
     build_fun!(no_special, set_no_special, NoSpecial);
     build_fun!(show_diff, set_show_diff, ShowDiff);
 
-    pub fn extend_with<S: AsRef<str>>(&mut self, rule: S) -> &mut Self {
-        let mut tokens = scan_tokens(rule);
-        if let Some(items) = parse_rule(&mut tokens) {
-            let mut items = items.into_iter()
-                .map(|item| ActionFuncPair {action: item.action, func: item.rule.gen_closure()})
-                .collect();
-            self.rules.append(&mut items);
-        }
-
-        self
-    }
-
-
-    /// Load sheets from disk at `path`
-    /// sheet may be in any of three forms: unparsed form with ext .rule,
-    /// two serialized forms: .json and .bin
-    ///
-    pub fn load_sheet<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        use std::io::Read;
-
+    /// Extend filter with rules from `data` which can belong to any kind of `SheetFormat`
+    pub fn extend_with<S: AsRef<str>>(&mut self, data: S, format: SheetFormat) -> &mut Self {
         #[inline]
         fn load_action_pairs<S: AsRef<str>>(rule: S) -> Option<Vec<FilterItem>> {
             let mut tokens = scan_tokens(rule);
@@ -96,11 +89,33 @@ impl Filter {
             wm_debug!("load_json_form");
             serde_json::from_str::<Vec<FilterItem>>(data).ok()
         }
+        if let Some(items) = match format {
+            SheetFormat::Json => load_json_form(data.as_ref()),
+            SheetFormat::Binary => load_bin_form(data.as_ref()),
+            SheetFormat::Plain => load_action_pairs(data.as_ref()),
+            _ => None
+        } {
+            let mut items = items.into_iter()
+                .map(|item| ActionFuncPair {action: item.action, func: item.rule.gen_closure()})
+                .collect();
+            self.rules.append(&mut items);
+        }
+        self
+    }
+
+
+    /// Load sheets from disk at `path`
+    /// sheet may be in any of three forms: unparsed form with ext .rule,
+    /// two serialized forms: .json and .bin
+    ///
+    pub fn load_sheet<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        use std::io::Read;
 
         let ext: OsString = match path.as_ref().extension() {
             Some(ext) => OsString::from(ext),
             None => return self
         };
+
 
         if let Ok(mut f) = File::open(path) {
             let mut data = String::new();
@@ -108,17 +123,13 @@ impl Filter {
                 return self;
             }
 
-            if let Some(items) = match ext.as_bytes() {
-                b"json" => load_json_form(&data),
-                    b"bin" => load_bin_form(&data),
-                    b"rule" => load_action_pairs(&data),
-                    _ => None
-            } {
-                let mut items = items.into_iter()
-                    .map(|item| ActionFuncPair {action: item.action, func: item.rule.gen_closure()})
-                    .collect();
-                self.rules.append(&mut items);
-            }
+            let format = match ext.as_bytes() {
+                b"json" => SheetFormat::Json,
+                b"bin" => SheetFormat::Binary,
+                b"rule" => SheetFormat::Plain,
+                _ => SheetFormat::Invalid
+            };
+            self.extend_with(&data, format);
         }
 
         self
@@ -930,7 +941,7 @@ mod tests {
     #[test]
     fn test_whole() {
         let mut filter = Filter::new();
-        filter.extend_with("name = dde*;".to_string());
+        filter.extend_with("name = dde*;".to_string(), SheetFormat::Plain);
         assert_eq!(filter.rules.len(), 1);
     }
 

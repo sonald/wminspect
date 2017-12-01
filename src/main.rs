@@ -37,11 +37,11 @@ pub fn main() {
     let (c, _) = xcb::Connection::connect(None).unwrap();
     let screen = c.get_setup().roots().next().unwrap();
 
-    let rule = match matches.value_of("filter") {
-        None => "".to_string(),
-        Some(s) => s.to_string()
+    let mut f = match matches.value_of("filter") {
+        None => wm::Filter::new(),
+        Some(rule) => wm::Filter::parse(rule)
     };
-    let mut f = wm::Filter::parse(rule);
+
     if matches.is_present("only-mapped") { f.set_mapped_only(); }
     if matches.is_present("colored") { f.set_colorful(); }
     if matches.is_present("omit-hidden") { f.set_omit_hidden(); }
