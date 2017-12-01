@@ -5,10 +5,6 @@ extern crate bincode as bc;
 use super::wm::*;
 use std::collections::HashSet;
 use std::convert::AsRef;
-use std::path::*;
-use std::fs::File;
-use std::ffi::OsString;
-use std::os::unix::ffi::OsStrExt;
 
 #[derive(Debug, Clone)]
 enum Condition {
@@ -51,18 +47,6 @@ macro_rules! build_fun {
         })
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum SheetFormat {
-    Invalid,
-    /// plain unparsed rule 
-    Plain,
-    /// serialized json format
-    Json,
-    /// serialized bincode format
-    Binary
-}
-
-
 impl Filter {
     build_fun!(mapped_only, set_mapped_only, MappedOnly);
     build_fun!(colorful, set_colorful, Colorful);
@@ -70,70 +54,6 @@ impl Filter {
     build_fun!(no_special, set_no_special, NoSpecial);
     build_fun!(show_diff, set_show_diff, ShowDiff);
 
-    /// Extend filter with rules from `data` which can belong to any kind of `SheetFormat`
-    pub fn extend_with<S: AsRef<str>>(&mut self, data: S, format: SheetFormat) -> &mut Self {
-        #[inline]
-        fn load_action_pairs<S: AsRef<str>>(rule: S) -> Option<Vec<FilterItem>> {
-            let mut tokens = scan_tokens(rule);
-            parse_rule(&mut tokens)
-        }
-
-        #[inline]
-        fn load_bin_form(data: &str) -> Option<Vec<FilterItem>> {
-            wm_debug!("load_bin_form");
-            bc::deserialize_from(&mut data.as_bytes(), bc::Infinite).ok()
-        }
-
-        #[inline]
-        fn load_json_form(data: &str) -> Option<Vec<FilterItem>> {
-            wm_debug!("load_json_form");
-            serde_json::from_str::<Vec<FilterItem>>(data).ok()
-        }
-        if let Some(items) = match format {
-            SheetFormat::Json => load_json_form(data.as_ref()),
-            SheetFormat::Binary => load_bin_form(data.as_ref()),
-            SheetFormat::Plain => load_action_pairs(data.as_ref()),
-            _ => None
-        } {
-            let mut items = items.into_iter()
-                .map(|item| ActionFuncPair {action: item.action, func: item.rule.gen_closure()})
-                .collect();
-            self.rules.append(&mut items);
-        }
-        self
-    }
-
-
-    /// Load sheets from disk at `path`
-    /// sheet may be in any of three forms: unparsed form with ext .rule,
-    /// two serialized forms: .json and .bin
-    ///
-    pub fn load_sheet<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        use std::io::Read;
-
-        let ext: OsString = match path.as_ref().extension() {
-            Some(ext) => OsString::from(ext),
-            None => return self
-        };
-
-
-        if let Ok(mut f) = File::open(path) {
-            let mut data = String::new();
-            if let Err(_) = f.read_to_string(&mut data) {
-                return self;
-            }
-
-            let format = match ext.as_bytes() {
-                b"json" => SheetFormat::Json,
-                b"bin" => SheetFormat::Binary,
-                b"rule" => SheetFormat::Plain,
-                _ => SheetFormat::Invalid
-            };
-            self.extend_with(&data, format);
-        }
-
-        self
-    }
 
     /// constructors
     pub fn new() -> Filter {
@@ -164,7 +84,7 @@ pub enum Action {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-enum Predicate {
+pub(crate) enum Predicate {
     Id,
     Name,
     Attr(String), // String contains attr name (map_state or override_redirect)
@@ -172,7 +92,7 @@ enum Predicate {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-enum Matcher {
+pub(crate) enum Matcher {
     IntegralValue(i32),
     BoolValue(bool),
     MapStateValue(MapState),
@@ -180,7 +100,7 @@ enum Matcher {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
-enum Op {
+pub(crate) enum Op {
     Eq,
     Neq,
     GT,
@@ -190,7 +110,7 @@ enum Op {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-enum FilterRule {
+pub(crate) enum FilterRule {
     //None,
     Single { pred: Predicate, op: Op, matcher: Matcher },
     All (Vec<Box<FilterRule>>),
@@ -199,9 +119,9 @@ enum FilterRule {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-struct FilterItem {
-    action: Action,
-    rule: FilterRule,
+pub(crate) struct FilterItem {
+    pub(crate) action: Action,
+    pub(crate) rule: FilterRule,
 }
 
 type BoxedRule = Box<FilterRule>;
@@ -282,7 +202,7 @@ fn parse_id(id_str: &str) -> u32 {
 } 
 
 impl FilterRule {
-    fn gen_closure(&self) -> FilterFunction {
+    pub(crate) fn gen_closure(&self) -> FilterFunction {
         match self {
             &FilterRule::Single {ref pred, ref op, ref matcher} => 
                 FilterRule::single_gen_closure(pred, op, matcher),
@@ -425,7 +345,7 @@ impl FilterRule {
 
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-enum Token {
+pub(crate) enum Token {
     OP(Op),
     StrLit(String), // ID or VALUE
     ACTION(Action),
@@ -442,7 +362,7 @@ enum Token {
 }
 
 use std::collections::VecDeque;
-type Tokens = VecDeque<Token>;
+pub(crate) type Tokens = VecDeque<Token>;
 
 /// grammar:
 /// top -> ( item ( ';' item )* )?
@@ -456,7 +376,7 @@ type Tokens = VecDeque<Token>;
 /// action -> 'filter' | 'pin'
 /// ID -> STRING_LIT
 /// VAL -> STRING_LIT
-fn parse_rule(tokens: &mut Tokens) -> Option<Vec<FilterItem>> {
+pub(crate) fn parse_rule(tokens: &mut Tokens) -> Option<Vec<FilterItem>> {
     use self::Token::*;
 
     let mut items = Vec::new();
@@ -613,11 +533,11 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                 None
             }
         },
-        _ => { wm_debug!("wrong match"); None } 
+        _ => { wm_debug!("wrong match: [{:?}]", tk); None } 
     }
 }
 
-fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
+pub(crate) fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
     use self::Token::*;
     macro_rules! append_tok {
         ($tokens:tt, $tk:expr) => ({
@@ -940,6 +860,7 @@ mod tests {
 
     #[test]
     fn test_whole() {
+        use super::super::sheets::SheetFormat;
         let mut filter = Filter::new();
         filter.extend_with("name = dde*;".to_string(), SheetFormat::Plain);
         assert_eq!(filter.rules.len(), 1);
@@ -1002,11 +923,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_load_sheet1() {
-        let mut f = Filter::new();
-        let p = Path::new("/home/sonald/test.json");
-        f.load_sheet(p);
-        assert_eq!(f.rules.len(), 1);
-    }
 }
