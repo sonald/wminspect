@@ -55,3 +55,8 @@ not(attrs.map_state=Viewable): pin;
 - [ ] xrandr events may affect definition of visible
 - [ ] on macOS, client id should be child of queried window
 - [ ] query_tree is heavy, need to cache window stack like mutter does
+- [ ] expand grammar to support window properties
+- [ ] expand grammar to support conditional expression
+- [ ] add gui support
+- [ ] add log level and detail management
+- [ ] on-the-fly rule injection/removal (via socket?)
