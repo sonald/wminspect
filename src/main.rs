@@ -70,7 +70,8 @@ pub fn main() {
     if matches.is_present("monitor") || matches.subcommand_matches("monitor").is_some() {
         wm::monitor(&c, &screen, &f);
     } else {
-        let windows = wm::collect_windows(&c, &f);
+        let ctx = wm::Context::new(&c);
+        let windows = ctx.collect_windows(&f);
         wm::dump_windows(&windows, &f, &HashSet::new());
     }
 }
