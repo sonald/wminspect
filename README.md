@@ -60,3 +60,7 @@ not(attrs.map_state=Viewable): pin;
 - [ ] add gui support
 - [ ] add log level and detail management
 - [ ] on-the-fly rule injection/removal (via socket?)
+
+
+## ideas
+- better event tracing, add tracepoint dynamically, listen to any property/attrs change 

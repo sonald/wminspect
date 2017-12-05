@@ -24,6 +24,7 @@ pub fn main() {
               Arg::from_usage("-s --no-special 'ignore special windows'"),
               Arg::from_usage("-n --num 'show event sequence count'"),
               Arg::from_usage("-d --diff 'highlight diffs between events'"),
+              Arg::from_usage("--clients-only 'trace clients of window manager only'"),
               Arg::from_usage("--show-grammar 'show detailed grammar for filter rule'"),
         ])
         .subcommand(SubCommand::with_name("monitor").about("the same as -m flag"))

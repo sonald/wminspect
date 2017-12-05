@@ -112,6 +112,7 @@ pub(crate) enum Op {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub(crate) enum FilterRule {
     //None,
+    ClientsOnly,
     Single { pred: Predicate, op: Op, matcher: Matcher },
     All (Vec<Box<FilterRule>>),
     Any (Vec<Box<FilterRule>>),
@@ -203,13 +204,19 @@ fn parse_id(id_str: &str) -> u32 {
 
 impl FilterRule {
     pub(crate) fn gen_closure(&self) -> FilterFunction {
+        use self::FilterRule::*;
         match self {
-            &FilterRule::Single {ref pred, ref op, ref matcher} => 
-                FilterRule::single_gen_closure(pred, op, matcher),
-            &FilterRule::All (ref rules) => FilterRule::all_gen_closure(rules),
-            &FilterRule::Any (ref rules) => FilterRule::any_gen_closure(rules),
-            &FilterRule::Not (ref rule) => FilterRule::not_gen_closure(rule)
+            &ClientsOnly => FilterRule::clients_only_gen_closure(),
+            &Single {ref pred, ref op, ref matcher} => FilterRule::single_gen_closure(pred, op, matcher),
+            &All (ref rules) => FilterRule::all_gen_closure(rules),
+            &Any (ref rules) => FilterRule::any_gen_closure(rules),
+            &Not (ref rule) => FilterRule::not_gen_closure(rule)
         }
+    }
+
+    /// TODO: clients info can only be retreived from wm context
+    fn clients_only_gen_closure() -> FilterFunction {
+        Box::new(|_w|{true})
     }
 
     fn any_gen_closure(rules: &Vec<BoxedRule>) -> FilterFunction {
@@ -364,18 +371,7 @@ pub(crate) enum Token {
 use std::collections::VecDeque;
 pub(crate) type Tokens = VecDeque<Token>;
 
-/// grammar:
-/// top -> ( item ( ';' item )* )?
-/// item -> cond ( ':' action)? 
-/// cond -> pred op VAL
-///     | ANY '(' cond (',' cond )* ')'
-///     | ALL '(' cond (',' cond )* ')'
-///     | NOT '(' cond ')'
-/// pred -> ID ('.' ID)*
-/// op -> '=' | '>' | '<' | '>=' | '<=' | '<>'
-/// action -> 'filter' | 'pin'
-/// ID -> STRING_LIT
-/// VAL -> STRING_LIT
+/// parse `Tokens` into FilterItem list
 pub(crate) fn parse_rule(tokens: &mut Tokens) -> Option<Vec<FilterItem>> {
     use self::Token::*;
 
@@ -462,6 +458,10 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
 
                 "id" | "name" => {
                     pred = if s == "id" { Predicate::Id } else { Predicate::Name };
+                },
+
+                "clients" => {
+                    return Some(FilterRule::ClientsOnly);
                 },
 
                 _ => { wm_debug!("wrong token"); }
@@ -665,6 +665,7 @@ pub fn filter_grammar() ->&'static str {
         | ANY '(' cond (',' cond )* ')'
         | ALL '(' cond (',' cond )* ')'
         | NOT '(' cond ')'
+        | 'clients'
     pred -> ID ('.' ID)*
     op -> '=' | '>' | '<' | '>=' | '<=' | '<>'
     action -> 'filter' | 'pin'
