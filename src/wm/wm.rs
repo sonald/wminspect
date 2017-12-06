@@ -11,8 +11,9 @@ use std::time;
 use std::thread;
 use xcb::xproto;
 use std::sync::*;
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, self};
+use std::collections::{HashMap, HashSet};
+use std::cmp::Ordering;
 
 use super::filter::*;
 use super::macros::print_type_of;
@@ -32,7 +33,7 @@ impl<T> Display for Geometry<T> where T: Display + Copy {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq)]
 pub enum MapState {
     Unmapped,
     Viewable,
@@ -44,8 +45,6 @@ impl PartialEq for MapState {
         return (*self as i32) == (*other as i32);
     }
 }
-
-impl Eq for MapState { }
 
 impl Display for MapState {
     fn fmt(&self, f: &mut Formatter) -> Result {
@@ -79,6 +78,26 @@ pub struct Window {
     valid: bool,
 }
 
+impl Eq for Window {}
+
+impl Ord for Window {
+    fn cmp(&self, other: &Window) -> Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+impl PartialOrd for Window {
+    fn partial_cmp(&self, other: &Window) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Window {
+    fn eq(&self, other: &Window) -> bool {
+        self.id == other.id
+    }
+}
+
 impl Display for Window {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let id = format!("0x{:x}", self.id);
@@ -98,14 +117,24 @@ impl Window {
     }
 }
 
+type WindowStackView = Vec<xcb::Window>;
+type WindowListView = HashSet<xcb::Window>;
 
 #[derive(Clone)]
-pub struct Context<'a> {
+pub struct Context<'a, 'b> {
     pub c: &'a xcb::Connection,
+    pub filter: &'b Filter,
 
     /// atom caches
     net_wm_name_atom: xcb::Atom,
     utf8_string_atom: xcb::Atom,
+
+    /// collected window infos
+    windows: Arc<Mutex<HashMap<xcb::Window, Window>>>,
+    /// a view sorted by stacking order (bottom -> top)
+    stack_view: Arc<Mutex<WindowStackView>>,
+    pinned_windows: Arc<Mutex<WindowListView>>,
+
 }
 
 pub enum XcbRequest<'a> {
@@ -120,32 +149,6 @@ macro_rules! do_filter {
         )
 }
 
-
-fn collect_pinned_windows(windows: &Vec<Window>, filter: &Filter) -> HashSet<xcb::Window> {
-    let f = |w: &Window| {
-        for rule in &filter.rules {
-            if rule.action == Action::Pin && rule.func.as_ref()(w) {
-                return Some(w.id.clone());
-            }
-        }
-        None
-    };
-
-    windows.iter().filter_map(f).collect()
-}
-
-pub fn dump_windows(windows: &Vec<Window>, filter: &Filter, changes: &HashSet<xcb::Window>) {
-    let colored = filter.colorful();
-    for (i, w) in windows.iter().enumerate() {
-        if filter.show_diff() && changes.contains(&w.id) {
-            println!("{}: {}", i, win2str(w, colored).on_white());
-        } else {
-            println!("{}: {}", i, win2str(w, colored));
-        }
-    }
-}
-
-
 #[derive(Debug, Clone)]
 pub enum Message {
     TimeoutEvent,
@@ -157,16 +160,113 @@ fn as_event<'r, T>(e: &'r xcb::GenericEvent) -> &'r T {
     return unsafe { xcb::cast_event::<T>(&e) };
 }
 
-impl<'a> Context<'a> {
-    pub fn new(c: &'a xcb::Connection) -> Context<'a> {
+impl<'a, 'b> Context<'a, 'b> {
+    pub fn new(c: &'a xcb::Connection, f: &'b Filter) -> Context<'a, 'b> {
         Context {
             c: c,
+            filter: f,
             net_wm_name_atom: xcb::intern_atom(c, false, "_NET_WM_NAME").get_reply().unwrap().atom(),
             utf8_string_atom: xcb::intern_atom(c, false, "UTF8_STRING").get_reply().unwrap().atom(),
+
+            windows: Arc::new(Mutex::new(HashMap::new())),
+            stack_view: Arc::new(Mutex::new(WindowStackView::new())),
+            pinned_windows: Arc::new(Mutex::new(WindowListView::new())),
         }
     }
 
-    pub fn collect_windows(&self, filter: &Filter) -> Vec<Window> {
+    /// `changes` is updated windows for current event
+    /// TODO: highlight pinned windows in different style
+    pub fn dump_windows(&self, changes: Option<WindowListView>) {
+        let windows = self.windows.lock().unwrap();
+
+        let colored = self.filter.colorful();
+        for (i, wid) in self.stack_view.lock().unwrap().iter().enumerate() {
+            let w = windows.get(wid).expect(&format!("{} does not exist!", wid));
+
+            if self.filter.show_diff() && changes.is_some() &&
+                changes.as_ref().unwrap().contains(&wid) {
+                println!("{}: {}", i, win2str(w, colored).on_white());
+            } else {
+                println!("{}: {}", i, win2str(w, colored));
+            }
+        }
+    }
+
+    pub fn is_window_concerned(&self, w: xcb::Window) -> bool {
+        self.windows.lock().unwrap().contains_key(&w)
+    }
+
+    /// add Window to the stack
+    pub fn update_with(&self, w: Window) {
+        let mut windows = self.windows.lock().unwrap();
+        let w = windows.entry(w.id).or_insert(w);
+        self.stack_view.lock().unwrap().push(w.id);
+        if w.is_window_pinned(self.filter) {
+            self.pinned_windows.lock().unwrap().insert(w.id);
+        }
+    }
+
+    pub fn update_pin_state(&self, w: &Window) {
+        if w.is_window_pinned(self.filter) {
+            self.pinned_windows.lock().unwrap().insert(w.id);
+        } else {
+            self.pinned_windows.lock().unwrap().remove(&w.id);
+        }
+    }
+
+    pub fn remove(&self, wid: xcb::Window) {
+        self.windows.lock().unwrap().remove(&wid);
+        self.stack_view.lock().unwrap().retain(|&w| w == wid);
+        self.pinned_windows.lock().unwrap().retain(|&w| w == wid);
+    }
+
+    pub fn get_windows(&self) -> MutexGuard<HashMap<xcb::Window, Window>> {
+        self.windows.lock().unwrap()
+    }
+
+    //pub fn get_window_mut(&self, wid: xcb::Window) -> Option<&mut Window> {
+        //let mut windows = self.windows.lock().unwrap();
+        //windows.get_mut(&wid)
+    //}
+
+
+    /// refresh internal windows cache from xserver
+    /// this is a very heavy operation and may stop the world now
+    /// (may be moved into a thread or so)
+    pub fn refresh_windows(&self) {
+        let windows = self.collect_windows();
+        {
+            let mut lock = self.stack_view.lock().unwrap();
+            *lock = windows.iter().map(|w| w.id).collect();
+        }
+
+        {
+            let mut lock = self.pinned_windows.lock().unwrap();
+            *lock = self.collect_pinned_windows();
+        }
+
+        {
+            let mut lock = self.windows.lock().unwrap();
+            *lock = windows.into_iter().map(|w| (w.id, w)).collect();
+        }
+    }
+
+    fn collect_pinned_windows(&self) -> WindowListView {
+        let filter = self.filter;
+        let f = |(_, w): (&xcb::Window, &Window)| {
+            for rule in &filter.rules {
+                if rule.action == Action::Pin && rule.func.as_ref()(w) {
+                    return Some(w.id.clone());
+                }
+            }
+            None
+        };
+
+        self.windows.lock().unwrap().iter().filter_map(f).collect()
+    }
+
+
+    pub fn collect_windows(&self) ->Vec<Window> {
         let c = self.c;
 
         let screen = c.get_setup().roots().next().unwrap();
@@ -178,15 +278,15 @@ impl<'a> Context<'a> {
         let mut target_windows = self.query_windows(&res);
         wm_debug!("initial total #{}", target_windows.len());
 
-        if filter.mapped_only() || filter.omit_hidden() {
+        if self.filter.mapped_only() || self.filter.omit_hidden() {
             let has_guard_window = target_windows.iter()
-                .any(|ref w| w.name.contains("guard window") && w.attrs.override_redirect);
+                .any(|w| w.name.contains("guard window") && w.attrs.override_redirect);
 
             if has_guard_window {
                 wm_debug!("has guard window, filter out not mapped or hidden");
             }
 
-            do_filter!(target_windows, skip_while, |ref w| {
+            do_filter!(target_windows, skip_while, |w| {
                 if has_guard_window {
                     !w.name.contains("guard window") || !w.attrs.override_redirect
                 } else {
@@ -194,19 +294,19 @@ impl<'a> Context<'a> {
                 }
             });
 
-            if filter.mapped_only() {
-                do_filter!(target_windows, filter, |w: &Window| { w.attrs.map_state == MapState::Viewable });
+            if self.filter.mapped_only() {
+                do_filter!(target_windows, filter, |w| { w.attrs.map_state == MapState::Viewable });
             }
 
-            if filter.omit_hidden() {
-                do_filter!(target_windows, filter, |ref w| {
+            if self.filter.omit_hidden() {
+                do_filter!(target_windows, filter, |w| {
                     w.geom.x < screen.width_in_pixels() as i32 && w.geom.y < screen.height_in_pixels() as i32 &&
                         w.geom.width + w.geom.x > 0 && w.geom.height + w.geom.y > 0
                 });
             }
         }
 
-        if filter.no_special() {
+        if self.filter.no_special() {
             let specials = hashset!(
                 ("mutter guard window"),
                 ("deepin-metacity guard window"),
@@ -216,8 +316,8 @@ impl<'a> Context<'a> {
             do_filter!(target_windows, filter, |w: &Window| { !specials.contains(w.name.as_str()) });
         }
 
-        if filter.rules.len() > 0 {
-            for rule in &filter.rules {
+        if self.filter.rules.len() > 0 {
+            for rule in &self.filter.rules {
                 if rule.action == Action::FilterOut {
                     do_filter!(target_windows, filter, rule.func.as_ref());
                 }
@@ -290,7 +390,7 @@ impl<'a> Context<'a> {
         return win;
     }
 
-    pub fn query_windows(&self, res: &xcb::QueryTreeReply) -> Vec<Window> {
+    fn query_windows(&self, res: &xcb::QueryTreeReply) -> Vec<Window> {
         let c = self.c;
 
         let mut qs: Vec<XcbRequest> = Vec::new();
@@ -298,7 +398,7 @@ impl<'a> Context<'a> {
             qs.push(XcbRequest::GWA(xcb::get_window_attributes(&c, *w)));
             qs.push(XcbRequest::GE(xcb::get_geometry(&c, *w)));
             qs.push(XcbRequest::GP(xcb::get_property(&c, false, *w, self.net_wm_name_atom,
-            self.utf8_string_atom, 0, std::u32::MAX)));
+                self.utf8_string_atom, 0, std::u32::MAX)));
             qs.push(XcbRequest::GP(xcb::get_property(&c, false, *w, xcb::xproto::ATOM_WM_NAME, 
                                                      xcb::xproto::ATOM_STRING, 0, std::u32::MAX)));
         }
@@ -365,34 +465,28 @@ impl<'a> Context<'a> {
 
 
 pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
-    let ctx = Arc::new(Context::new(c));
+    let ctx = Arc::new(Context::new(c, filter));
 
     let ev_mask: u32 = xproto::EVENT_MASK_SUBSTRUCTURE_NOTIFY;
     xcb::xproto::change_window_attributes(ctx.c, screen.root(), 
                                           &[(xcb::xproto::CW_EVENT_MASK, ev_mask)]);
     c.flush();
 
-    let windows = Arc::new(Mutex::new(ctx.collect_windows(filter)));
+    ctx.refresh_windows();
+
     let last_configure_xid = Arc::new(Mutex::new(xcb::WINDOW_NONE));
     let need_configure = AtomicBool::new(false);
-    let pins = Arc::new(Mutex::new(collect_pinned_windows(windows.lock().unwrap().as_ref(), filter)));
     let (tx, rx) = mpsc::channel::<Message>();
 
-    dump_windows(&windows.lock().unwrap(), filter, &pins.lock().unwrap());
-    print_type_of(&windows);
+    ctx.dump_windows(None);
 
     crossbeam::scope(|scope| {
 
         {
-            let windows = windows.clone();
-            let pins = pins.clone();
             let ctx = ctx.clone();
             let last_configure_xid = last_configure_xid.clone();
 
             scope.spawn(move || {
-                let event_related = |ev_win: xcb::Window| windows.lock().unwrap().iter().any(|ref w| w.id == ev_win);
-                print_type_of(filter);
-
                 let idle_configure_timeout = time::Duration::from_millis(200);
                 let mut last_checked_time = time::Instant::now();
 
@@ -401,38 +495,33 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         Ok(Message::TimeoutEvent) => { 
                             wm_debug!("recv timeout"); 
                             last_checked_time = time::Instant::now();
-                            need_configure.store(true, Ordering::Release)
+                            need_configure.store(true, atomic::Ordering::Release)
                         },
                         Ok(Message::Reset) => { 
-                            need_configure.store(false, Ordering::Release)
+                            need_configure.store(false, atomic::Ordering::Release)
                         },
                         Ok(Message::Quit) => { break; },
                         _ =>  {}
                     }
 
-                    if need_configure.load(Ordering::Acquire) && last_checked_time.elapsed() > idle_configure_timeout {
+                    if need_configure.load(atomic::Ordering::Acquire) && last_checked_time.elapsed() > idle_configure_timeout {
                         let last_xid = *last_configure_xid.lock().unwrap();
-                        if event_related(last_xid) {
+                        if ctx.is_window_concerned(last_xid) {
                             wm_debug!("timedout, reload");
                             println!("delayed configure 0x{:x} ", last_xid);
 
-                            let mut windows = windows.lock().unwrap();
-                            let mut locked = pins.lock().unwrap();
-                            let mut diff = HashSet::new();
-                            {
-                                let cw = windows.iter().find(|ref w| w.id == last_xid);
-                                if cw.is_some() && cw.unwrap().is_window_pinned(filter) {
-                                    locked.insert(last_xid);
-                                } else if filter.show_diff() {
-                                    diff = locked.clone();
-                                    diff.insert(last_xid);
-                                }
-                            }
+                            let diff = if filter.show_diff() {
+                                Some(hashset!(last_xid))
+                            } else {
+                                None
+                            };
+                            //TODO: update the pinned list
+                            
                             //FIXME: we do full collect_windows here because I have no facility
                             //to track stacking operations yet.
-                            *windows = ctx.collect_windows(filter);
-                            dump_windows(&windows, filter, if diff.is_empty() { &locked } else { &diff });
-                            need_configure.store(false, Ordering::Release);
+                            ctx.refresh_windows();
+                            ctx.dump_windows(diff);
+                            need_configure.store(false, atomic::Ordering::Release);
                         }
                     }
                 }
@@ -441,7 +530,6 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
         }
 
 
-        let event_related = |ev_win: xcb::Window| windows.lock().unwrap().iter().any(|ref w| w.id == ev_win);
         loop {
             if let Some(ev) = ctx.c.poll_for_event() {
                 match ev.response_type() & !0x80 {
@@ -454,68 +542,47 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
 
                         // assumes that window will be at top when created
                         let new_win = ctx.query_window(cne.window());
-                        let mut diff = HashSet::new();
-                        let mut locked = pins.lock().unwrap();
-                        {
-                            if new_win.is_window_pinned(filter) {
-                                locked.insert(cne.window());
-                            } else if filter.show_diff() {
-                                diff = locked.clone();
-                                diff.insert(cne.window());
-                            }
-                        }
+                        ctx.update_with(new_win);
+                        let diff = if filter.show_diff() {
+                            Some(hashset!(cne.window()))
+                        } else {
+                            None
+                        };
 
-                        windows.lock().unwrap().push(new_win);
-                        dump_windows(&windows.lock().unwrap(), filter,
-                            if diff.is_empty() { &locked } else { &diff });
+                        ctx.dump_windows(diff);
                     },
                     xcb::xproto::DESTROY_NOTIFY => {
                         let dne = as_event::<xcb::DestroyNotifyEvent>(&ev);
 
-                        if event_related(dne.window()) {
+                        if ctx.is_window_concerned(dne.window()) {
                             println!("destroy 0x{:x}", dne.window());
-                            windows.lock().unwrap().retain(|ref w| w.id != dne.window());
-                            {
-                                let mut locked = pins.lock().unwrap();
-                                if locked.contains(&dne.window()) {
-                                    locked.remove(&dne.window());
-                                }
-                            }
-                            dump_windows(&windows.lock().unwrap(), filter, &pins.lock().unwrap());
+                            ctx.remove(dne.window());
+
+                            ctx.dump_windows(None);
                         }
                     },
 
                     xcb::xproto::REPARENT_NOTIFY => {
                         let rne = as_event::<xcb::ReparentNotifyEvent>(&ev);
 
-                        if event_related(rne.window()) {
-                            let mut windows = windows.lock().unwrap();
+                        if ctx.is_window_concerned(rne.window()) {
                             if rne.parent() != screen.root() {
                                 println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
-                                windows.retain(|ref w| w.id != rne.window());
-                                {
-                                    let mut locked = pins.lock().unwrap();
-                                    if locked.contains(&rne.window()) {
-                                        locked.remove(&rne.window());
-                                    }
-                                }
-                                dump_windows(&windows, filter, &pins.lock().unwrap());
+                                ctx.remove(rne.window());
+
+                                ctx.dump_windows(None);
 
                             } else {
                                 println!("reparent 0x{:x} to root", rne.window());
                                 let new_win = ctx.query_window(rne.window());
-                                let mut locked = pins.lock().unwrap();
-                                let mut diff = HashSet::new();
-                                {
-                                    if new_win.is_window_pinned(filter) {
-                                        locked.insert(rne.window());
-                                    } else if filter.show_diff() {
-                                        diff = locked.clone();
-                                        diff.insert(rne.window());
-                                    }
-                                }
-                                windows.push(new_win);
-                                dump_windows(&windows, filter, if diff.is_empty() { &locked } else { &diff });
+                                ctx.update_with(new_win);
+
+                                let diff = if filter.show_diff() {
+                                    Some(hashset!(rne.window()))
+                                } else {
+                                    None
+                                };
+                                ctx.dump_windows(diff);
                             }
                         }
                     },
@@ -523,25 +590,20 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     xproto::CONFIGURE_NOTIFY => {
                         let cne = as_event::<xcb::ConfigureNotifyEvent>(&ev);
 
-                        if event_related(cne.window()) && event_related(cne.above_sibling()) {
+                        //TODO: take care other CNE cases
+                        if ctx.is_window_concerned(cne.window()) && ctx.is_window_concerned(cne.above_sibling()) {
                             if *last_configure_xid.lock().unwrap() != cne.window() {
-                                let mut windows = windows.lock().unwrap();
-                                let mut locked = pins.lock().unwrap();
-                                let mut diff = HashSet::new();
-                                {
-                                    let cw = windows.iter().find(|ref w| w.id == cne.window());
-                                    if cw.is_some() && cw.unwrap().is_window_pinned(filter) {
-                                        locked.insert(cne.window());
-                                    } else if filter.show_diff() {
-                                        diff = locked.clone();
-                                        diff.insert(cne.window());
-                                    }
-                                }
                                 println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
+                                let diff = if filter.show_diff() {
+                                    Some(hashset!(cne.window(), cne.above_sibling()))
+                                } else {
+                                    None
+                                };
+
                                 //FIXME: we do full collect_windows here because I have no facility
                                 //to track stacking operations yet.
-                                *windows = ctx.collect_windows(filter);
-                                dump_windows(&windows, filter, if diff.is_empty() { &locked } else { &diff });
+                                ctx.refresh_windows();
+                                ctx.dump_windows(diff);
                                 *last_configure_xid.lock().unwrap() = cne.window();
                                 tx.send(Message::Reset).unwrap();
 
@@ -554,44 +616,38 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                     xproto::MAP_NOTIFY => {
                         let mn = as_event::<xcb::MapNotifyEvent>(&ev);
 
-                        if event_related(mn.window()) {
-                            let mut windows = windows.lock().unwrap();
-                            let mut diff = HashSet::new();
-                            let mut locked = pins.lock().unwrap();
-
+                        if ctx.is_window_concerned(mn.window()) {
                             {
-                                let win = windows.iter_mut().find(|ref mut w| w.id == mn.window()).unwrap();
+                                let mut windows = ctx.get_windows();
+                                let win = windows.get_mut(&mn.window()).unwrap();
                                 win.attrs.map_state = MapState::Viewable;
+
                                 println!("map 0x{:x}", mn.window());
 
-                                if win.is_window_pinned(filter) {
-                                    locked.insert(mn.window());
-                                } else if filter.show_diff() {
-                                    diff = locked.clone();
-                                    diff.insert(mn.window());
-                                }
+                                ctx.update_pin_state(win);
                             }
-                            dump_windows(&windows, filter, if diff.is_empty() { &locked } else { &diff });
+
+                            let diff = if filter.show_diff() {
+                                Some(hashset!(mn.window()))
+                            } else {
+                                None
+                            };
+                            ctx.dump_windows(diff);
                         }
                     },
 
                     xproto::UNMAP_NOTIFY => {
                         let un = as_event::<xcb::UnmapNotifyEvent>(&ev);
 
-                        if event_related(un.window()) {
+                        if ctx.is_window_concerned(un.window()) {
                             {
-                                let mut locked = windows.lock().unwrap();
-                                let win = locked.iter_mut().find(|ref w| w.id == un.window()).unwrap();
+                                let mut windows = ctx.get_windows();
+                                let win = windows.get_mut(&un.window()).unwrap();
                                 win.attrs.map_state = MapState::Unmapped;
+                                ctx.update_pin_state(win);
                             }
                             println!("unmap 0x{:x}", un.window());
-                            {
-                                let mut locked = pins.lock().unwrap();
-                                if locked.contains(&un.window()) {
-                                    locked.remove(&un.window());
-                                }
-                            }
-                            dump_windows(&windows.lock().unwrap(), filter, &pins.lock().unwrap());
+                            ctx.dump_windows(None);
                         }
                     },
 

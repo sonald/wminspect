@@ -7,10 +7,8 @@ extern crate clap;
 extern crate serde_derive;
 extern crate serde;
 
-
-use std::collections::HashSet;
 use clap::{Arg, App, SubCommand};
-mod wm;
+pub mod wm;
 
 pub fn main() {
     let matches = App::new("window manager inspector")
@@ -71,9 +69,9 @@ pub fn main() {
     if matches.is_present("monitor") || matches.subcommand_matches("monitor").is_some() {
         wm::monitor(&c, &screen, &f);
     } else {
-        let ctx = wm::Context::new(&c);
-        let windows = ctx.collect_windows(&f);
-        wm::dump_windows(&windows, &f, &HashSet::new());
+        let ctx = wm::Context::new(&c, &f);
+        ctx.refresh_windows();
+        ctx.dump_windows(None);
     }
 }
 
