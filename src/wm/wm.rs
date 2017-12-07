@@ -120,6 +120,17 @@ impl Window {
 type WindowStackView = Vec<xcb::Window>;
 type WindowListView = HashSet<xcb::Window>;
 
+/// contains cached windows data, which should keep in sync with server
+struct WindowsLayout {
+    /// collected window infos
+    windows: HashMap<xcb::Window, Window>,
+
+    /// a view sorted by stacking order (bottom -> top)
+    stack_view: WindowStackView,
+
+    pinned_windows: WindowListView,
+}
+
 #[derive(Clone)]
 pub struct Context<'a, 'b> {
     pub c: &'a xcb::Connection,
@@ -129,12 +140,9 @@ pub struct Context<'a, 'b> {
     net_wm_name_atom: xcb::Atom,
     utf8_string_atom: xcb::Atom,
 
-    /// collected window infos
-    windows: Arc<Mutex<HashMap<xcb::Window, Window>>>,
-    /// a view sorted by stacking order (bottom -> top)
-    stack_view: Arc<Mutex<WindowStackView>>,
-    pinned_windows: Arc<Mutex<WindowListView>>,
-
+    //TODO: move into inner struct as one, and save two extra locks
+    inner: Arc<Mutex<WindowsLayout>>,
+    
 }
 
 pub enum XcbRequest<'a> {
@@ -168,20 +176,23 @@ impl<'a, 'b> Context<'a, 'b> {
             net_wm_name_atom: xcb::intern_atom(c, false, "_NET_WM_NAME").get_reply().unwrap().atom(),
             utf8_string_atom: xcb::intern_atom(c, false, "UTF8_STRING").get_reply().unwrap().atom(),
 
-            windows: Arc::new(Mutex::new(HashMap::new())),
-            stack_view: Arc::new(Mutex::new(WindowStackView::new())),
-            pinned_windows: Arc::new(Mutex::new(WindowListView::new())),
+            inner: Arc::new(Mutex::new(
+                    WindowsLayout {
+                        windows:  HashMap::new(),
+                        stack_view: WindowStackView::new(),
+                        pinned_windows: WindowListView::new(),
+                    }))
         }
     }
 
     /// `changes` is updated windows for current event
     /// TODO: highlight pinned windows in different style
     pub fn dump_windows(&self, changes: Option<WindowListView>) {
-        let windows = self.windows.lock().unwrap();
+        let layout = self.inner.lock().unwrap();
 
         let colored = self.filter.colorful();
-        for (i, wid) in self.stack_view.lock().unwrap().iter().enumerate() {
-            let w = windows.get(wid).expect(&format!("{} does not exist!", wid));
+        for (i, wid) in layout.stack_view.iter().enumerate() {
+            let w = layout.windows.get(wid).expect(&format!("{} does not exist!", wid));
 
             if self.filter.show_diff() && changes.is_some() &&
                 changes.as_ref().unwrap().contains(&wid) {
@@ -193,67 +204,66 @@ impl<'a, 'b> Context<'a, 'b> {
     }
 
     pub fn is_window_concerned(&self, w: xcb::Window) -> bool {
-        self.windows.lock().unwrap().contains_key(&w)
+        let layout = self.inner.lock().unwrap();
+        layout.windows.contains_key(&w)
     }
 
     /// add Window to the stack
     pub fn update_with(&self, w: Window) {
-        let mut windows = self.windows.lock().unwrap();
-        let w = windows.entry(w.id).or_insert(w);
-        self.stack_view.lock().unwrap().push(w.id);
+        let wid = w.id;
+
+        let mut layout = self.inner.lock().unwrap();
+        layout.stack_view.push(wid);
         if w.is_window_pinned(self.filter) {
-            self.pinned_windows.lock().unwrap().insert(w.id);
+            layout.pinned_windows.insert(wid);
         }
+        layout.windows.entry(w.id).or_insert(w);
     }
 
     pub fn update_pin_state(&self, w: &Window) {
+        let mut layout = self.inner.lock().unwrap();
         if w.is_window_pinned(self.filter) {
-            self.pinned_windows.lock().unwrap().insert(w.id);
+            layout.pinned_windows.insert(w.id);
         } else {
-            self.pinned_windows.lock().unwrap().remove(&w.id);
+            layout.pinned_windows.remove(&w.id);
         }
     }
 
     pub fn remove(&self, wid: xcb::Window) {
-        self.windows.lock().unwrap().remove(&wid);
-        self.stack_view.lock().unwrap().retain(|&w| w == wid);
-        self.pinned_windows.lock().unwrap().retain(|&w| w == wid);
+        let mut layout = self.inner.lock().unwrap();
+        layout.windows.remove(&wid);
+        layout.stack_view.retain(|&w| w == wid);
+        layout.pinned_windows.retain(|&w| w == wid);
     }
 
-    pub fn get_windows(&self) -> MutexGuard<HashMap<xcb::Window, Window>> {
-        self.windows.lock().unwrap()
+    pub fn with_window_mut<F>(&self, wid: xcb::Window, mut f: F) where F: FnMut(&mut Window) {
+        let mut layout = self.inner.lock().unwrap();
+        if let Some(win) = layout.windows.get_mut(&wid) {
+            f(win);
+        } else {
+            wm_debug!("with_window_mut: bad wid {}", wid);
+        }
     }
-
-    //pub fn get_window_mut(&self, wid: xcb::Window) -> Option<&mut Window> {
-        //let mut windows = self.windows.lock().unwrap();
-        //windows.get_mut(&wid)
-    //}
 
 
     /// refresh internal windows cache from xserver
     /// this is a very heavy operation and may stop the world now
     /// (may be moved into a thread or so)
     pub fn refresh_windows(&self) {
+        let mut layout = self.inner.lock().unwrap();
+
         let windows = self.collect_windows();
-        {
-            let mut lock = self.stack_view.lock().unwrap();
-            *lock = windows.iter().map(|w| w.id).collect();
-        }
 
-        {
-            let mut lock = self.pinned_windows.lock().unwrap();
-            *lock = self.collect_pinned_windows();
-        }
+        layout.stack_view = windows.iter().map(|w| w.id).collect();
+        layout.pinned_windows = self.collect_pinned_windows(&windows);
+        layout.windows = windows.into_iter().map(|w| (w.id, w)).collect();
 
-        {
-            let mut lock = self.windows.lock().unwrap();
-            *lock = windows.into_iter().map(|w| (w.id, w)).collect();
-        }
+        wm_debug!("size {}", layout.windows.len());
     }
 
-    fn collect_pinned_windows(&self) -> WindowListView {
+    fn collect_pinned_windows(&self, windows: &Vec<Window>) -> WindowListView {
         let filter = self.filter;
-        let f = |(_, w): (&xcb::Window, &Window)| {
+        let f = |w| {
             for rule in &filter.rules {
                 if rule.action == Action::Pin && rule.func.as_ref()(w) {
                     return Some(w.id.clone());
@@ -262,7 +272,7 @@ impl<'a, 'b> Context<'a, 'b> {
             None
         };
 
-        self.windows.lock().unwrap().iter().filter_map(f).collect()
+        windows.iter().filter_map(f).collect()
     }
 
 
@@ -618,13 +628,15 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
 
                         if ctx.is_window_concerned(mn.window()) {
                             {
-                                let mut windows = ctx.get_windows();
-                                let win = windows.get_mut(&mn.window()).unwrap();
-                                win.attrs.map_state = MapState::Viewable;
+                                ctx.with_window_mut(mn.window(), |win| {
+                                    win.attrs.map_state = MapState::Viewable;
+                                    ctx.update_pin_state(win);
+                                });
+                                //let mut windows = ctx.get_windows();
+                                //let win = windows.get_mut(&mn.window()).unwrap();
 
                                 println!("map 0x{:x}", mn.window());
 
-                                ctx.update_pin_state(win);
                             }
 
                             let diff = if filter.show_diff() {
@@ -641,10 +653,12 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
 
                         if ctx.is_window_concerned(un.window()) {
                             {
-                                let mut windows = ctx.get_windows();
-                                let win = windows.get_mut(&un.window()).unwrap();
-                                win.attrs.map_state = MapState::Unmapped;
-                                ctx.update_pin_state(win);
+                                ctx.with_window_mut(un.window(), |win| {
+                                    win.attrs.map_state = MapState::Unmapped;
+                                    ctx.update_pin_state(win);
+                                });
+                                //let mut windows = ctx.get_windows();
+                                //let win = windows.get_mut(&un.window()).unwrap();
                             }
                             println!("unmap 0x{:x}", un.window());
                             ctx.dump_windows(None);
