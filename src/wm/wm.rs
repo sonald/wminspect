@@ -16,20 +16,28 @@ use std::collections::{HashMap, HashSet};
 use std::cmp::Ordering;
 
 use super::filter::*;
-use super::macros::print_type_of;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Geometry<T> where T: Copy {
-    pub x: T,
-    pub y: T,
-    pub width: T,
-    pub height: T,
+pub struct Geometry {
+    pub x: i16,
+    pub y: i16,
+    pub width: u16,
+    pub height: u16,
 }
 
-impl<T> Display for Geometry<T> where T: Display + Copy {
+impl Display for Geometry {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "{}", format!("{}x{}+{}+{}", self.width, self.height,
                                 self.x, self.y))
+    }
+}
+
+impl Geometry {
+    pub fn update_with_configure(&mut self, cne: &xcb::ConfigureNotifyEvent) {
+        self.x = cne.x();
+        self.y = cne.y();
+        self.width = cne.width();
+        self.height = cne.height();
     }
 }
 
@@ -74,7 +82,7 @@ pub struct Window {
     pub id: xcb::Window,
     pub name: String,
     pub attrs: Attributes,
-    pub geom: Geometry<i32>,
+    pub geom: Geometry,
     valid: bool,
 }
 
@@ -124,10 +132,10 @@ type WindowListView = HashSet<xcb::Window>;
 struct WindowsLayout {
     /// collected window infos
     windows: HashMap<xcb::Window, Window>,
-
-    /// a view sorted by stacking order (bottom -> top)
+    /// a view maintained by stacking order (bottom -> top)
     stack_view: WindowStackView,
 
+    filtered_view: WindowStackView,
     pinned_windows: WindowListView,
 }
 
@@ -179,6 +187,8 @@ impl<'a, 'b> Context<'a, 'b> {
                 WindowsLayout {
                     windows:  HashMap::new(),
                     stack_view: WindowStackView::new(),
+
+                    filtered_view: WindowStackView::new(),
                     pinned_windows: WindowListView::new(),
                 })
         }
@@ -190,7 +200,7 @@ impl<'a, 'b> Context<'a, 'b> {
         let layout = self.inner.lock().unwrap();
 
         let colored = self.filter.colorful();
-        for (i, wid) in layout.stack_view.iter().enumerate() {
+        for (i, wid) in layout.filtered_view.iter().enumerate() {
             let w = layout.windows.get(wid).expect(&format!("{} does not exist!", wid));
 
             if self.filter.show_diff() && changes.is_some() &&
@@ -202,9 +212,10 @@ impl<'a, 'b> Context<'a, 'b> {
         }
     }
 
+    /// Tell if window is contained in current filter rule set.
     pub fn is_window_concerned(&self, w: xcb::Window) -> bool {
         let layout = self.inner.lock().unwrap();
-        layout.windows.contains_key(&w)
+        layout.filtered_view.iter().any(|&id| id == w)
     }
 
     /// add Window to the stack
@@ -213,6 +224,7 @@ impl<'a, 'b> Context<'a, 'b> {
 
         let mut layout = self.inner.lock().unwrap();
         layout.stack_view.push(wid);
+        layout.filtered_view.push(wid);
         if w.is_window_pinned(self.filter) {
             layout.pinned_windows.insert(wid);
         }
@@ -237,8 +249,9 @@ impl<'a, 'b> Context<'a, 'b> {
     pub fn remove(&self, wid: xcb::Window) {
         let mut layout = self.inner.lock().unwrap();
         layout.windows.remove(&wid);
-        layout.stack_view.retain(|&w| w == wid);
-        layout.pinned_windows.retain(|&w| w == wid);
+        layout.stack_view.retain(|&w| w != wid);
+        layout.filtered_view.retain(|&w| w != wid);
+        layout.pinned_windows.retain(|&w| w != wid);
     }
 
     /// lock and call `f`, do not call any locking operations in `f`
@@ -262,9 +275,76 @@ impl<'a, 'b> Context<'a, 'b> {
 
         layout.stack_view = windows.iter().map(|w| w.id).collect();
         layout.pinned_windows = self.collect_pinned_windows(&windows);
-        layout.windows = windows.into_iter().map(|w| (w.id, w)).collect();
+        layout.windows = windows.clone().into_iter().map(|w| (w.id, w)).collect();
+        layout.filtered_view = self.apply_filter(windows);
 
         wm_debug!("size {}", layout.windows.len());
+        //wm_debug!("stack_view: {:?}, \nfiltered_view: {:?}", layout.stack_view, layout.filtered_view);
+    }
+
+    fn update_stack_unlocked(&self, layout: &mut WindowsLayout, wid: xcb::Window, above: xcb::Window) {
+        //wm_debug!("update_stack_unlocked {:#x} {:#x}", wid, above);
+        if !layout.windows.contains_key(&wid) {
+            return;
+        }
+
+        layout.stack_view.retain(|&w| w != wid);
+        if above == xcb::WINDOW_NONE {
+            layout.stack_view.insert(0, wid);
+        } else {
+            //TODO: check if operation needed
+            let idx = layout.stack_view.iter().position(|&x| x == above).unwrap();
+            layout.stack_view.insert(idx+1, wid);
+        }
+
+        if layout.filtered_view.iter().any(|&id| id == wid) {
+            wm_debug!("update_stack_unlocked {:#x} {:#x}", wid, above);
+            wm_debug!("PRE: filtered_view: {:?}", layout.filtered_view);
+            layout.filtered_view.retain(|&w| w != wid);
+            if above == xcb::WINDOW_NONE || layout.filtered_view.len() == 0 {
+                layout.filtered_view.insert(0, wid);
+            } else {
+                if let Some(idx) = layout.filtered_view.iter().position(|&x| x == above) {
+                    layout.filtered_view.insert(idx+1, wid);
+                } else {
+                    // find neareast lower sibling as above_sibling
+                    let lower_id = *layout.stack_view.iter().rev().skip_while(|&&id| id == above)
+                        .find(|&&w| layout.filtered_view.iter().position(|&id| id == w).is_some())
+                        .unwrap();
+                    let upper_bound = layout.filtered_view.iter().position(|&w| w == lower_id).unwrap();
+                    layout.filtered_view.insert(upper_bound+1, wid);
+                }
+            }
+            wm_debug!("POST: filtered_view: {:?}", layout.filtered_view);
+        }
+    }
+
+    /// sync stack from configure notify
+    pub fn update_stack(&self, wid: xcb::Window, above: xcb::Window) {
+        let mut layout = self.inner.lock().unwrap();
+        self.update_stack_unlocked(&mut layout, wid, above);
+    }
+
+    fn update_window_unlocked(&self, layout: &mut WindowsLayout, cne: &xcb::ConfigureNotifyEvent) {
+        let wid = cne.window();
+
+        if !layout.windows.contains_key(&wid) {
+            return;
+        }
+
+        if let Some(win) = layout.windows.get_mut(&wid) {
+            win.geom.update_with_configure(cne);
+        }
+    }
+
+    /// update inner window layout from configure event
+    pub fn update_window(&self, cne: &xcb::ConfigureNotifyEvent) {
+        //wm_debug!("update_window {:#x} ", cne.window());
+        let mut layout = self.inner.lock().unwrap();
+        let wid = cne.window();
+
+        self.update_stack_unlocked(&mut layout, wid, cne.above_sibling());
+        self.update_window_unlocked(&mut layout, cne);
     }
 
     fn collect_pinned_windows(&self, windows: &Vec<Window>) -> WindowListView {
@@ -282,7 +362,7 @@ impl<'a, 'b> Context<'a, 'b> {
     }
 
 
-    pub fn collect_windows(&self) ->Vec<Window> {
+    fn collect_windows(&self) ->Vec<Window> {
         let c = self.c;
 
         let screen = c.get_setup().roots().next().unwrap();
@@ -291,8 +371,13 @@ impl<'a, 'b> Context<'a, 'b> {
             Err(_) => return Vec::new(),
         };
 
-        let mut target_windows = self.query_windows(&res);
+        let target_windows = self.query_windows(&res);
         wm_debug!("initial total #{}", target_windows.len());
+        target_windows
+    }
+
+    fn apply_filter(&self, mut target_windows: Vec<Window>) -> WindowStackView {
+        let screen = self.c.get_setup().roots().next().unwrap();
 
         if self.filter.mapped_only() || self.filter.omit_hidden() {
             let has_guard_window = target_windows.iter()
@@ -316,8 +401,9 @@ impl<'a, 'b> Context<'a, 'b> {
 
             if self.filter.omit_hidden() {
                 do_filter!(target_windows, filter, |w| {
-                    w.geom.x < screen.width_in_pixels() as i32 && w.geom.y < screen.height_in_pixels() as i32 &&
-                        w.geom.width + w.geom.x > 0 && w.geom.height + w.geom.y > 0
+                    (w.geom.x as u16) < screen.width_in_pixels() &&
+                        (w.geom.y as u16) < screen.height_in_pixels() &&
+                        w.geom.width + w.geom.x as u16 > 0 && w.geom.height + w.geom.y as u16 > 0
                 });
             }
         }
@@ -340,7 +426,7 @@ impl<'a, 'b> Context<'a, 'b> {
             }
         }
 
-        return target_windows;
+        target_windows.into_iter().map(|w| w.id).collect()
     }
 
 
@@ -386,10 +472,10 @@ impl<'a, 'b> Context<'a, 'b> {
                 XcbRequest::GE(cookie) => {
                     apply_reply!(win cookie reply {
                         win.geom = Geometry {
-                            x: reply.x() as i32, 
-                            y: reply.y() as i32,
-                            width: reply.width() as i32,
-                            height: reply.height() as i32,
+                            x: reply.x(), 
+                            y: reply.y(),
+                            width: reply.width(),
+                            height: reply.height(),
                         };
                     })
                 },
@@ -456,10 +542,10 @@ impl<'a, 'b> Context<'a, 'b> {
                     XcbRequest::GE(cookie) => {
                         apply_reply!(win cookie reply {
                             win.geom = Geometry {
-                                x: reply.x() as i32, 
-                                y: reply.y() as i32,
-                                width: reply.width() as i32,
-                                height: reply.height() as i32,
+                                x: reply.x(), 
+                                y: reply.y(),
+                                width: reply.width(),
+                                height: reply.height(),
                             };
                         })
                     },
@@ -530,11 +616,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                             } else {
                                 None
                             };
-                            //TODO: update the pinned list
                             
-                            //FIXME: we do full collect_windows here because I have no facility
-                            //to track stacking operations yet.
-                            ctx.refresh_windows();
                             ctx.dump_windows(diff);
                             need_configure.store(false, atomic::Ordering::Release);
                         }
@@ -605,9 +687,9 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
 
                     xproto::CONFIGURE_NOTIFY => {
                         let cne = as_event::<xcb::ConfigureNotifyEvent>(&ev);
+                        ctx.update_window(cne);
 
-                        //TODO: take care other CNE cases
-                        if ctx.is_window_concerned(cne.window()) && ctx.is_window_concerned(cne.above_sibling()) {
+                        if ctx.is_window_concerned(cne.window()) {
                             if *last_configure_xid.lock().unwrap() != cne.window() {
                                 println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
                                 let diff = if filter.show_diff() {
@@ -616,9 +698,6 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                                     None
                                 };
 
-                                //FIXME: we do full collect_windows here because I have no facility
-                                //to track stacking operations yet.
-                                ctx.refresh_windows();
                                 ctx.dump_windows(diff);
                                 *last_configure_xid.lock().unwrap() = cne.window();
                                 tx.send(Message::Reset).unwrap();

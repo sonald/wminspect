@@ -93,7 +93,7 @@ pub(crate) enum Predicate {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Matcher {
-    IntegralValue(i32),
+    IntegralValue(i16),
     BoolValue(bool),
     MapStateValue(MapState),
     Wildcard(String), // all string values are considered wildcard matcher
@@ -319,7 +319,7 @@ impl FilterRule {
                 }
             },
             (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "width" => {
-                let i = *i;
+                let i = *i as u16;
                 match *op {
                     Op::Eq =>  Box::new(move |ref w| w.geom.width == i),
                     Op::Neq => Box::new(move |ref w| w.geom.width != i),
@@ -330,7 +330,7 @@ impl FilterRule {
                 }
             },
             (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "height" => {
-                let i = *i;
+                let i = *i as u16;
                 match *op {
                     Op::Eq =>  Box::new(move |ref w| w.geom.height == i),
                     Op::Neq => Box::new(move |ref w| w.geom.height != i),
@@ -488,7 +488,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                             })
                         },
                         Predicate::Attr(_) => panic!("bad attr name"),
-                        Predicate::Geom(_) => Matcher::IntegralValue(s.parse::<i32>().unwrap_or(0))
+                        Predicate::Geom(_) => Matcher::IntegralValue(s.parse::<i16>().unwrap_or(0))
                     };
 
                     Some(FilterRule::Single {
