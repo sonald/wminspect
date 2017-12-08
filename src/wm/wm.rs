@@ -131,7 +131,6 @@ struct WindowsLayout {
     pinned_windows: WindowListView,
 }
 
-#[derive(Clone)]
 pub struct Context<'a, 'b> {
     pub c: &'a xcb::Connection,
     pub filter: &'b Filter,
@@ -141,7 +140,7 @@ pub struct Context<'a, 'b> {
     utf8_string_atom: xcb::Atom,
 
     //TODO: move into inner struct as one, and save two extra locks
-    inner: Arc<Mutex<WindowsLayout>>,
+    inner: Mutex<WindowsLayout>,
     
 }
 
@@ -176,12 +175,12 @@ impl<'a, 'b> Context<'a, 'b> {
             net_wm_name_atom: xcb::intern_atom(c, false, "_NET_WM_NAME").get_reply().unwrap().atom(),
             utf8_string_atom: xcb::intern_atom(c, false, "UTF8_STRING").get_reply().unwrap().atom(),
 
-            inner: Arc::new(Mutex::new(
-                    WindowsLayout {
-                        windows:  HashMap::new(),
-                        stack_view: WindowStackView::new(),
-                        pinned_windows: WindowListView::new(),
-                    }))
+            inner: Mutex::new(
+                WindowsLayout {
+                    windows:  HashMap::new(),
+                    stack_view: WindowStackView::new(),
+                    pinned_windows: WindowListView::new(),
+                })
         }
     }
 
@@ -220,12 +219,18 @@ impl<'a, 'b> Context<'a, 'b> {
         layout.windows.entry(w.id).or_insert(w);
     }
 
-    pub fn update_pin_state(&self, w: &Window) {
+    pub fn update_pin_state(&self, wid: xcb::Window) {
         let mut layout = self.inner.lock().unwrap();
-        if w.is_window_pinned(self.filter) {
-            layout.pinned_windows.insert(w.id);
+        let pinned = if let Some(win) = layout.windows.get_mut(&wid) {
+            win.is_window_pinned(self.filter)
         } else {
-            layout.pinned_windows.remove(&w.id);
+            return;
+        };
+
+        if pinned {
+            layout.pinned_windows.insert(wid);
+        } else {
+            layout.pinned_windows.remove(&wid);
         }
     }
 
@@ -236,6 +241,7 @@ impl<'a, 'b> Context<'a, 'b> {
         layout.pinned_windows.retain(|&w| w == wid);
     }
 
+    /// lock and call `f`, do not call any locking operations in `f`
     pub fn with_window_mut<F>(&self, wid: xcb::Window, mut f: F) where F: FnMut(&mut Window) {
         let mut layout = self.inner.lock().unwrap();
         if let Some(win) = layout.windows.get_mut(&wid) {
@@ -475,7 +481,7 @@ impl<'a, 'b> Context<'a, 'b> {
 
 
 pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
-    let ctx = Arc::new(Context::new(c, filter));
+    let ctx = &Context::new(c, filter);
 
     let ev_mask: u32 = xproto::EVENT_MASK_SUBSTRUCTURE_NOTIFY;
     xcb::xproto::change_window_attributes(ctx.c, screen.root(), 
@@ -493,7 +499,6 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
     crossbeam::scope(|scope| {
 
         {
-            let ctx = ctx.clone();
             let last_configure_xid = last_configure_xid.clone();
 
             scope.spawn(move || {
@@ -542,6 +547,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
 
         loop {
             if let Some(ev) = ctx.c.poll_for_event() {
+                //wm_debug!("event: {}", ev.response_type() & !0x80);
                 match ev.response_type() & !0x80 {
                     xcb::xproto::CREATE_NOTIFY => {
                         let cne = as_event::<xcb::CreateNotifyEvent>(&ev);
@@ -627,17 +633,12 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         let mn = as_event::<xcb::MapNotifyEvent>(&ev);
 
                         if ctx.is_window_concerned(mn.window()) {
-                            {
-                                ctx.with_window_mut(mn.window(), |win| {
-                                    win.attrs.map_state = MapState::Viewable;
-                                    ctx.update_pin_state(win);
-                                });
-                                //let mut windows = ctx.get_windows();
-                                //let win = windows.get_mut(&mn.window()).unwrap();
+                            ctx.with_window_mut(mn.window(), |win| {
+                                win.attrs.map_state = MapState::Viewable;
+                            });
+                            ctx.update_pin_state(mn.window());
 
-                                println!("map 0x{:x}", mn.window());
-
-                            }
+                            println!("map 0x{:x}", mn.window());
 
                             let diff = if filter.show_diff() {
                                 Some(hashset!(mn.window()))
@@ -652,14 +653,10 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         let un = as_event::<xcb::UnmapNotifyEvent>(&ev);
 
                         if ctx.is_window_concerned(un.window()) {
-                            {
-                                ctx.with_window_mut(un.window(), |win| {
-                                    win.attrs.map_state = MapState::Unmapped;
-                                    ctx.update_pin_state(win);
-                                });
-                                //let mut windows = ctx.get_windows();
-                                //let win = windows.get_mut(&un.window()).unwrap();
-                            }
+                            ctx.with_window_mut(un.window(), |win| {
+                                win.attrs.map_state = MapState::Unmapped;
+                            });
+                            ctx.update_pin_state(un.window());
                             println!("unmap 0x{:x}", un.window());
                             ctx.dump_windows(None);
                         }
