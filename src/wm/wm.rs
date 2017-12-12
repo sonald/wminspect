@@ -164,11 +164,26 @@ macro_rules! do_filter {
         )
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Message {
-    TimeoutEvent,
+    LastConfigureEvent(xcb::ffi::xcb_configure_notify_event_t),
     Reset,
     Quit,
+}
+
+impl Debug for Message {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        use self::Message::*;
+        match self {
+            &LastConfigureEvent(ref raw) => {
+                write!(f, "Message::LastConfigureEvent(ConfigureNotify{{\
+                    w: {:#x}, above: {:#x}, x: {:#x}, y: {:#x}, width: {:#x}, height: {:#x}}})",
+                    raw.window, raw.above_sibling, raw.x, raw.y, raw.width, raw.height)
+            },
+            &Reset => write!(f, "Message::Reset"),
+            &Quit => write!(f, "Message::Quit"),
+        }
+    }
 }
 
 fn as_event<'r, T>(e: &'r xcb::GenericEvent) -> &'r T {
@@ -298,8 +313,8 @@ impl<'a, 'b> Context<'a, 'b> {
         }
 
         if layout.filtered_view.iter().any(|&id| id == wid) {
-            wm_debug!("update_stack_unlocked {:#x} {:#x}", wid, above);
-            wm_debug!("PRE: filtered_view: {:?}", layout.filtered_view);
+            //wm_debug!("update_stack_unlocked {:#x} {:#x}", wid, above);
+            //wm_debug!("PRE: filtered_view: {:?}", layout.filtered_view);
             layout.filtered_view.retain(|&w| w != wid);
             if above == xcb::WINDOW_NONE || layout.filtered_view.len() == 0 {
                 layout.filtered_view.insert(0, wid);
@@ -315,7 +330,7 @@ impl<'a, 'b> Context<'a, 'b> {
                     layout.filtered_view.insert(upper_bound+1, wid);
                 }
             }
-            wm_debug!("POST: filtered_view: {:?}", layout.filtered_view);
+            //wm_debug!("POST: filtered_view: {:?}", layout.filtered_view);
         }
     }
 
@@ -576,43 +591,47 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
 
     ctx.refresh_windows();
 
-    let last_configure_xid = Arc::new(Mutex::new(xcb::WINDOW_NONE));
     let need_configure = AtomicBool::new(false);
     let (tx, rx) = mpsc::channel::<Message>();
 
     ctx.dump_windows(None);
 
     crossbeam::scope(|scope| {
-
         {
-            let last_configure_xid = last_configure_xid.clone();
-
             scope.spawn(move || {
-                let idle_configure_timeout = time::Duration::from_millis(200);
+                let idle_configure_timeout = time::Duration::from_millis(100);
                 let mut last_checked_time = time::Instant::now();
+
+                let mut raw_cne = None;
 
                 loop {
                     match rx.recv_timeout(time::Duration::from_millis(10)) {
-                        Ok(Message::TimeoutEvent) => { 
-                            wm_debug!("recv timeout"); 
+                        Ok(Message::LastConfigureEvent(raw)) => { 
                             last_checked_time = time::Instant::now();
-                            need_configure.store(true, atomic::Ordering::Release)
+                            need_configure.store(true, atomic::Ordering::Release);
+                            raw_cne = Some(raw);
                         },
                         Ok(Message::Reset) => { 
-                            need_configure.store(false, atomic::Ordering::Release)
+                            need_configure.store(false, atomic::Ordering::Release);
                         },
                         Ok(Message::Quit) => { break; },
                         _ =>  {}
                     }
 
                     if need_configure.load(atomic::Ordering::Acquire) && last_checked_time.elapsed() > idle_configure_timeout {
-                        let last_xid = *last_configure_xid.lock().unwrap();
-                        if ctx.is_window_concerned(last_xid) {
+                        let raw_cne = raw_cne.unwrap();
+                        let cne = xcb::ConfigureNotifyEvent::new(
+                            raw_cne.event, raw_cne.window, raw_cne.above_sibling,
+                            raw_cne.x, raw_cne.y, raw_cne.width, raw_cne.height, 
+                            raw_cne.border_width,
+                            if raw_cne.override_redirect == 0 {false} else {true});
+
+                        if ctx.is_window_concerned(cne.window()) {
                             wm_debug!("timedout, reload");
-                            println!("delayed configure 0x{:x} ", last_xid);
+                            println!("delayed configure 0x{:x} ", cne.window());
 
                             let diff = if filter.show_diff() {
-                                Some(hashset!(last_xid))
+                                Some(hashset!(cne.window(), cne.above_sibling()))
                             } else {
                                 None
                             };
@@ -627,6 +646,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
         }
 
 
+        let mut last_configure_xid = xcb::WINDOW_NONE;
         loop {
             if let Some(ev) = ctx.c.poll_for_event() {
                 //wm_debug!("event: {}", ev.response_type() & !0x80);
@@ -690,7 +710,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         ctx.update_window(cne);
 
                         if ctx.is_window_concerned(cne.window()) {
-                            if *last_configure_xid.lock().unwrap() != cne.window() {
+                            if last_configure_xid != cne.window() {
                                 println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
                                 let diff = if filter.show_diff() {
                                     Some(hashset!(cne.window(), cne.above_sibling()))
@@ -698,12 +718,14 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                                     None
                                 };
 
+
                                 ctx.dump_windows(diff);
-                                *last_configure_xid.lock().unwrap() = cne.window();
+                                last_configure_xid = cne.window();
                                 tx.send(Message::Reset).unwrap();
 
                             } else {
-                                tx.send(Message::TimeoutEvent).unwrap();
+                                let clone: xcb::ffi::xcb_configure_notify_event_t = unsafe {*cne.ptr}.clone();
+                                tx.send(Message::LastConfigureEvent(clone)).unwrap();
                             }
                         }
                     },
