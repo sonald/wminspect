@@ -313,7 +313,7 @@ impl<'a, 'b> Context<'a, 'b> {
         }
 
         if layout.filtered_view.iter().any(|&id| id == wid) {
-            //wm_debug!("update_stack_unlocked {:#x} {:#x}", wid, above);
+            wm_debug!("update_stack_unlocked {:#x} {:#x}", wid, above);
             //wm_debug!("PRE: filtered_view: {:?}", layout.filtered_view);
             layout.filtered_view.retain(|&w| w != wid);
             if above == xcb::WINDOW_NONE || layout.filtered_view.len() == 0 {
@@ -416,9 +416,9 @@ impl<'a, 'b> Context<'a, 'b> {
 
             if self.filter.omit_hidden() {
                 do_filter!(target_windows, filter, |w| {
-                    (w.geom.x as u16) < screen.width_in_pixels() &&
-                        (w.geom.y as u16) < screen.height_in_pixels() &&
-                        w.geom.width + w.geom.x as u16 > 0 && w.geom.height + w.geom.y as u16 > 0
+                    w.geom.x < screen.width_in_pixels() as i16 &&
+                        w.geom.y < screen.height_in_pixels() as i16 &&
+                        (w.geom.width as i16) + w.geom.x > 0 && (w.geom.height as i16) + w.geom.y > 0
                 });
             }
         }
@@ -599,7 +599,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
     crossbeam::scope(|scope| {
         {
             scope.spawn(move || {
-                let idle_configure_timeout = time::Duration::from_millis(100);
+                let idle_configure_timeout = time::Duration::from_millis(50);
                 let mut last_checked_time = time::Instant::now();
 
                 let mut raw_cne = None;
@@ -628,7 +628,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
 
                         if ctx.is_window_concerned(cne.window()) {
                             wm_debug!("timedout, reload");
-                            println!("delayed configure 0x{:x} ", cne.window());
+                            println!("delayed configure {:#x} ", cne.window());
 
                             let diff = if filter.show_diff() {
                                 Some(hashset!(cne.window(), cne.above_sibling()))
