@@ -17,6 +17,25 @@ use std::cmp::Ordering;
 
 use super::filter::*;
 
+/// helper type to format vec of window
+struct HexedVec<'a, T: 'a>(&'a Vec<T>);
+
+impl<'a, T: Debug + LowerHex> Debug for HexedVec<'a, T> {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        let mut has_next = false;
+        let mut s = String::new();
+        write!(&mut s, "[")?;
+        for t in self.0 {
+            let prefix = if has_next { ", " } else { "" };
+            write!(&mut s, "{}{:#x}", prefix, t)?;
+            has_next = true;
+        }
+        write!(&mut s, "]")?;
+
+        write!(f, "{}", s)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Geometry {
     pub x: i16,
@@ -141,11 +160,13 @@ struct WindowsLayout {
 
 pub struct Context<'a, 'b> {
     pub c: &'a xcb::Connection,
+    pub root: xcb::Window,
     pub filter: &'b Filter,
 
     /// atom caches
     net_wm_name_atom: xcb::Atom,
     utf8_string_atom: xcb::Atom,
+    _net_client_list_stacking_atom: xcb::Atom,
 
     //TODO: move into inner struct as one, and save two extra locks
     inner: Mutex<WindowsLayout>,
@@ -192,11 +213,15 @@ fn as_event<'r, T>(e: &'r xcb::GenericEvent) -> &'r T {
 
 impl<'a, 'b> Context<'a, 'b> {
     pub fn new(c: &'a xcb::Connection, f: &'b Filter) -> Context<'a, 'b> {
+        let screen = c.get_setup().roots().next().unwrap();
+
         Context {
             c: c,
+            root: screen.root(),
             filter: f,
             net_wm_name_atom: xcb::intern_atom(c, false, "_NET_WM_NAME").get_reply().unwrap().atom(),
             utf8_string_atom: xcb::intern_atom(c, false, "UTF8_STRING").get_reply().unwrap().atom(),
+            _net_client_list_stacking_atom: xcb::intern_atom(c, false, "_NET_CLIENT_LIST_STACKING").get_reply().unwrap().atom(),
 
             inner: Mutex::new(
                 WindowsLayout {
@@ -284,8 +309,9 @@ impl<'a, 'b> Context<'a, 'b> {
     /// this is a very heavy operation and may stop the world now
     /// (may be moved into a thread or so)
     pub fn refresh_windows(&self) {
-        let mut layout = self.inner.lock().unwrap();
+        self.collect_window_manager_properties();
 
+        let mut layout = self.inner.lock().unwrap();
         let windows = self.collect_windows();
 
         layout.stack_view = windows.iter().map(|w| w.id).collect();
@@ -294,7 +320,8 @@ impl<'a, 'b> Context<'a, 'b> {
         layout.filtered_view = self.apply_filter(windows);
 
         wm_debug!("size {}", layout.windows.len());
-        //wm_debug!("stack_view: {:?}, \nfiltered_view: {:?}", layout.stack_view, layout.filtered_view);
+        //wm_debug!("stack_view: {:?}, \nfiltered_view: {:?}",
+                  //HexedVec(&layout.stack_view), HexedVec(&layout.filtered_view));
     }
 
     fn update_stack_unlocked(&self, layout: &mut WindowsLayout, wid: xcb::Window, above: xcb::Window) {
@@ -314,7 +341,7 @@ impl<'a, 'b> Context<'a, 'b> {
 
         if layout.filtered_view.iter().any(|&id| id == wid) {
             wm_debug!("update_stack_unlocked {:#x} {:#x}", wid, above);
-            //wm_debug!("PRE: filtered_view: {:?}", layout.filtered_view);
+            //wm_debug!("PRE: filtered_view: {:?}", HexedVec(&layout.filtered_view));
             layout.filtered_view.retain(|&w| w != wid);
             if above == xcb::WINDOW_NONE || layout.filtered_view.len() == 0 {
                 layout.filtered_view.insert(0, wid);
@@ -330,7 +357,7 @@ impl<'a, 'b> Context<'a, 'b> {
                     layout.filtered_view.insert(upper_bound+1, wid);
                 }
             }
-            //wm_debug!("POST: filtered_view: {:?}", layout.filtered_view);
+            //wm_debug!("POST: filtered_view: {:?}", HexedVec(&layout.filtered_view));
         }
     }
 
@@ -380,8 +407,7 @@ impl<'a, 'b> Context<'a, 'b> {
     fn collect_windows(&self) ->Vec<Window> {
         let c = self.c;
 
-        let screen = c.get_setup().roots().next().unwrap();
-        let res = match xcb::query_tree(&c, screen.root()).get_reply() {
+        let res = match xcb::query_tree(&c, self.root).get_reply() {
             Ok(result) => result,
             Err(_) => return Vec::new(),
         };
@@ -444,6 +470,21 @@ impl<'a, 'b> Context<'a, 'b> {
         target_windows.into_iter().map(|w| w.id).collect()
     }
 
+    fn collect_window_manager_properties(&self) {
+        let c = self.c;
+
+        let cookie = xcb::get_property(&c, false, self.root, self._net_client_list_stacking_atom, 
+                          xcb::xproto::ATOM_WINDOW, 0, std::u32::MAX);
+        match cookie.get_reply() {
+            Ok(reply) => {
+                if reply.value_len() > 0 {
+                    let list = reply.value::<xcb::Window>().to_vec();
+                    wm_debug!("CLIENT_LIST: {:#?}", HexedVec(&list));
+                }
+            },
+            Err(_) => {return}
+        }
+    }
 
     pub fn query_window(&self, id: xcb::Window) -> Window {
         let c = self.c;
@@ -452,7 +493,7 @@ impl<'a, 'b> Context<'a, 'b> {
         qs.push(XcbRequest::GWA(xcb::get_window_attributes(&c, id)));
         qs.push(XcbRequest::GE(xcb::get_geometry(&c, id)));
         qs.push(XcbRequest::GP(xcb::get_property(&c, false, id, self.net_wm_name_atom,
-        self.utf8_string_atom, 0, std::u32::MAX)));
+                                                 self.utf8_string_atom, 0, std::u32::MAX)));
         qs.push(XcbRequest::GP(xcb::get_property(&c, false, id, xcb::xproto::ATOM_WM_NAME, 
                                                  xcb::xproto::ATOM_STRING, 0, std::u32::MAX)));
 
@@ -581,11 +622,11 @@ impl<'a, 'b> Context<'a, 'b> {
 }
 
 
-pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
+pub fn monitor(c: &xcb::Connection, filter: &Filter) {
     let ctx = &Context::new(c, filter);
 
     let ev_mask: u32 = xproto::EVENT_MASK_SUBSTRUCTURE_NOTIFY;
-    xcb::xproto::change_window_attributes(ctx.c, screen.root(), 
+    xcb::xproto::change_window_attributes(ctx.c, ctx.root,
                                           &[(xcb::xproto::CW_EVENT_MASK, ev_mask)]);
     c.flush();
 
@@ -653,7 +694,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                 match ev.response_type() & !0x80 {
                     xcb::xproto::CREATE_NOTIFY => {
                         let cne = as_event::<xcb::CreateNotifyEvent>(&ev);
-                        if cne.parent() != screen.root() {
+                        if cne.parent() != ctx.root {
                             break;
                         }
                         println!("create 0x{:x}, parent 0x{:x}", cne.window(), cne.parent());
@@ -684,7 +725,7 @@ pub fn monitor(c: &xcb::Connection, screen: &xcb::Screen, filter: &Filter) {
                         let rne = as_event::<xcb::ReparentNotifyEvent>(&ev);
 
                         if ctx.is_window_concerned(rne.window()) {
-                            if rne.parent() != screen.root() {
+                            if rne.parent() != ctx.root {
                                 println!("reparent 0x{:x} to 0x{:x}", rne.window(), rne.parent());
                                 ctx.remove(rne.window());
 

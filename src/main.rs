@@ -41,7 +41,6 @@ pub fn main() {
 
 
     let (c, _) = xcb::Connection::connect(None).unwrap();
-    let screen = c.get_setup().roots().next().unwrap();
 
     let mut f = match matches.value_of("filter") {
         None => wm::Filter::new(),
@@ -67,7 +66,7 @@ pub fn main() {
     if matches.is_present("diff") { f.set_show_diff(); }
 
     if matches.is_present("monitor") || matches.subcommand_matches("monitor").is_some() {
-        wm::monitor(&c, &screen, &f);
+        wm::monitor(&c, &f);
     } else {
         let ctx = wm::Context::new(&c, &f);
         ctx.refresh_windows();
