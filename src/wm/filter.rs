@@ -6,74 +6,49 @@ use super::wm::*;
 use std::collections::HashSet;
 use std::convert::AsRef;
 
-#[derive(Debug, Clone)]
-enum Condition {
-    Colorful,
-    MappedOnly,
-    OmitHidden,
-    NoSpecial,
-    ShowDiff,
-}
-
-type FilterFunction = Box<Fn(&Window) -> bool>;
+type FilterFunction = Box<Fn(&Window) -> bool + Send>;
 
 pub struct ActionFuncPair {
     pub action: Action,
+    pub(crate) rule: FilterRule,
     pub func: FilterFunction
 }
 
 pub struct Filter {
-    options: Vec<Condition>,
     pub rules: Vec<ActionFuncPair>
-        
 }
 
-/// this is probably wrong, but I use filter as read-only after built-up.
 unsafe impl Sync for Filter {}
 
-macro_rules! build_fun {
-    ($getter:ident, $setter:ident, $cond:tt) => (
-        pub fn $getter(&self) -> bool {
-            self.options.as_slice().iter().any(|c| {
-                match *c {
-                    Condition::$cond => true,
-                    _ => false
-                }
-            })
-        }
-        
-        pub fn $setter(&mut self) {
-            self.options.push(Condition::$cond)
-        })
-}
-
 impl Filter {
-    build_fun!(mapped_only, set_mapped_only, MappedOnly);
-    build_fun!(colorful, set_colorful, Colorful);
-    build_fun!(omit_hidden, set_omit_hidden, OmitHidden);
-    build_fun!(no_special, set_no_special, NoSpecial);
-    build_fun!(show_diff, set_show_diff, ShowDiff);
-
 
     /// constructors
     pub fn new() -> Filter {
-        Filter { options: Vec::new(), rules: Vec::new(), }
+        Filter { rules: Vec::new(), }
     }
 
     pub fn parse<S: AsRef<str>>(rule: S) -> Filter {
-        let mut filter = Filter { options: Vec::new(), rules: Vec::new(), };
+        let mut filter = Filter { rules: Vec::new(), };
 
         let mut tokens = scan_tokens(rule);
         if let Some(top) = parse_rule(&mut tokens) {
-            for item in top.iter() {
+            for item in top.into_iter() {
                 wm_debug!("item: {:?}", item);
-                filter.rules.push(ActionFuncPair {action: item.action, func: item.rule.gen_closure()});
+                let f = item.rule.gen_closure();
+                filter.rules.push(ActionFuncPair { action: item.action, rule: item.rule, func: f});
             }
         }
 
         filter
     }
 
+    pub fn apply_to(&self, w: &Window) -> bool {
+        !self.rules.iter().any(|r| r.action == Action::FilterOut && !(r.func)(w))
+    }
+
+    pub fn add_adhoc_rule(&mut self, item: ActionFuncPair) {
+        self.rules.push(item);
+    }
 }
 
 
@@ -111,7 +86,7 @@ pub(crate) enum Op {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub(crate) enum FilterRule {
-    //None,
+    Adhoc,
     ClientsOnly,
     Single { pred: Predicate, op: Op, matcher: Matcher },
     All (Vec<Box<FilterRule>>),
@@ -206,11 +181,12 @@ impl FilterRule {
     pub(crate) fn gen_closure(&self) -> FilterFunction {
         use self::FilterRule::*;
         match self {
+            &Adhoc => {Box::new(|_w| true)},
             &ClientsOnly => FilterRule::clients_only_gen_closure(),
             &Single {ref pred, ref op, ref matcher} => FilterRule::single_gen_closure(pred, op, matcher),
             &All (ref rules) => FilterRule::all_gen_closure(rules),
             &Any (ref rules) => FilterRule::any_gen_closure(rules),
-            &Not (ref rule) => FilterRule::not_gen_closure(rule)
+            &Not (ref rule) => FilterRule::not_gen_closure(rule),
         }
     }
 

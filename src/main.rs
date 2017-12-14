@@ -22,7 +22,7 @@ pub fn main() {
               Arg::from_usage("-s --no-special 'ignore special windows'"),
               Arg::from_usage("-n --num 'show event sequence count'"),
               Arg::from_usage("-d --diff 'highlight diffs between events'"),
-              Arg::from_usage("--clients-only 'trace clients of window manager only'"),
+              Arg::from_usage("-C --clients-only 'trace clients of window manager only'"),
               Arg::from_usage("--show-grammar 'show detailed grammar for filter rule'"),
         ])
         .subcommand(SubCommand::with_name("monitor").about("the same as -m flag"))
@@ -59,16 +59,18 @@ pub fn main() {
         }
     }
 
-    if matches.is_present("only-mapped") { f.set_mapped_only(); }
-    if matches.is_present("colored") { f.set_colorful(); }
-    if matches.is_present("omit-hidden") { f.set_omit_hidden(); }
-    if matches.is_present("no-special") { f.set_no_special(); }
-    if matches.is_present("diff") { f.set_show_diff(); }
+    let mut ctx = wm::Context::new(&c, f);
+
+    if matches.is_present("only-mapped") { ctx.set_mapped_only(); }
+    if matches.is_present("colored") { ctx.set_colorful(); }
+    if matches.is_present("omit-hidden") { ctx.set_omit_hidden(); }
+    if matches.is_present("no-special") { ctx.set_no_special(); }
+    if matches.is_present("diff") { ctx.set_show_diff(); }
+    if matches.is_present("clients-only") { ctx.set_clients_only(); }
 
     if matches.is_present("monitor") || matches.subcommand_matches("monitor").is_some() {
-        wm::monitor(&c, &f);
+        wm::monitor(&mut ctx);
     } else {
-        let ctx = wm::Context::new(&c, &f);
         ctx.refresh_windows();
         ctx.dump_windows(None);
     }

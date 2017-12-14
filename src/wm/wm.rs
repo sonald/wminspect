@@ -158,10 +158,22 @@ struct WindowsLayout {
     pinned_windows: WindowListView,
 }
 
-pub struct Context<'a, 'b> {
+#[derive(Debug, Clone)]
+pub enum Condition {
+    Colorful,
+    MappedOnly,
+    OmitHidden,
+    NoSpecial,
+    ShowDiff,
+    ClientsOnly,
+}
+
+pub struct Context<'a> {
     pub c: &'a xcb::Connection,
     pub root: xcb::Window,
-    pub filter: &'b Filter,
+    filter: Mutex<Filter>,
+
+    pub options: Vec<Condition>,
 
     /// atom caches
     net_wm_name_atom: xcb::Atom,
@@ -177,12 +189,6 @@ pub enum XcbRequest<'a> {
     GWA(xcb::GetWindowAttributesCookie<'a>),
     GE(xcb::GetGeometryCookie<'a>),
     GP(xcb::GetPropertyCookie<'a>),
-}
-
-macro_rules! do_filter {
-    ($windows:ident, $op:ident, $rule:expr) => (
-        $windows = $windows.into_iter(). $op ( $rule ) .collect::<Vec<_>>();
-        )
 }
 
 #[derive(Clone)]
@@ -211,14 +217,40 @@ fn as_event<'r, T>(e: &'r xcb::GenericEvent) -> &'r T {
     return unsafe { xcb::cast_event::<T>(&e) };
 }
 
-impl<'a, 'b> Context<'a, 'b> {
-    pub fn new(c: &'a xcb::Connection, f: &'b Filter) -> Context<'a, 'b> {
+macro_rules! build_fun {
+    ($getter:ident, $setter:ident, $cond:tt) => (
+        pub fn $getter(&self) -> bool {
+            self.options.as_slice().iter().any(|c| {
+                match *c {
+                    Condition::$cond => true,
+                    _ => false
+                }
+            })
+        }
+        
+        pub fn $setter(&mut self) {
+            self.options.push(Condition::$cond)
+        })
+}
+
+
+impl<'a> Context<'a> {
+    build_fun!(mapped_only, set_mapped_only, MappedOnly);
+    build_fun!(colorful, set_colorful, Colorful);
+    build_fun!(omit_hidden, set_omit_hidden, OmitHidden);
+    build_fun!(no_special, set_no_special, NoSpecial);
+    build_fun!(show_diff, set_show_diff, ShowDiff);
+    build_fun!(clients_only, set_clients_only, ClientsOnly);
+
+    pub fn new(c: &'a xcb::Connection, f: Filter) -> Context<'a> {
         let screen = c.get_setup().roots().next().unwrap();
 
         Context {
             c: c,
             root: screen.root(),
-            filter: f,
+            filter: Mutex::new(f),
+            options: Vec::new(),
+
             net_wm_name_atom: xcb::intern_atom(c, false, "_NET_WM_NAME").get_reply().unwrap().atom(),
             utf8_string_atom: xcb::intern_atom(c, false, "UTF8_STRING").get_reply().unwrap().atom(),
             _net_client_list_stacking_atom: xcb::intern_atom(c, false, "_NET_CLIENT_LIST_STACKING").get_reply().unwrap().atom(),
@@ -239,11 +271,11 @@ impl<'a, 'b> Context<'a, 'b> {
     pub fn dump_windows(&self, changes: Option<WindowListView>) {
         let layout = self.inner.lock().unwrap();
 
-        let colored = self.filter.colorful();
+        let colored = self.colorful();
         for (i, wid) in layout.filtered_view.iter().enumerate() {
             let w = layout.windows.get(wid).expect(&format!("{} does not exist!", wid));
 
-            if self.filter.show_diff() && changes.is_some() &&
+            if self.show_diff() && changes.is_some() &&
                 changes.as_ref().unwrap().contains(&wid) {
                 println!("{}: {}", i, win2str(w, colored).on_white());
             } else {
@@ -263,9 +295,11 @@ impl<'a, 'b> Context<'a, 'b> {
         let wid = w.id;
 
         let mut layout = self.inner.lock().unwrap();
+        let filter = self.filter.lock().unwrap();
+
         layout.stack_view.push(wid);
         layout.filtered_view.push(wid);
-        if w.is_window_pinned(self.filter) {
+        if w.is_window_pinned(&filter) {
             layout.pinned_windows.insert(wid);
         }
         layout.windows.entry(w.id).or_insert(w);
@@ -273,8 +307,10 @@ impl<'a, 'b> Context<'a, 'b> {
 
     pub fn update_pin_state(&self, wid: xcb::Window) {
         let mut layout = self.inner.lock().unwrap();
+        let filter = self.filter.lock().unwrap();
+
         let pinned = if let Some(win) = layout.windows.get_mut(&wid) {
-            win.is_window_pinned(self.filter)
+            win.is_window_pinned(&filter)
         } else {
             return;
         };
@@ -309,7 +345,6 @@ impl<'a, 'b> Context<'a, 'b> {
     /// this is a very heavy operation and may stop the world now
     /// (may be moved into a thread or so)
     pub fn refresh_windows(&self) {
-        self.collect_window_manager_properties();
 
         let mut layout = self.inner.lock().unwrap();
         let windows = self.collect_windows();
@@ -317,7 +352,9 @@ impl<'a, 'b> Context<'a, 'b> {
         layout.stack_view = windows.iter().map(|w| w.id).collect();
         layout.pinned_windows = self.collect_pinned_windows(&windows);
         layout.windows = windows.clone().into_iter().map(|w| (w.id, w)).collect();
-        layout.filtered_view = self.apply_filter(windows);
+
+        self.rebuild_filter();
+        layout.filtered_view = self.apply_filter(&windows);
 
         wm_debug!("size {}", layout.windows.len());
         //wm_debug!("stack_view: {:?}, \nfiltered_view: {:?}",
@@ -390,7 +427,7 @@ impl<'a, 'b> Context<'a, 'b> {
     }
 
     fn collect_pinned_windows(&self, windows: &Vec<Window>) -> WindowListView {
-        let filter = self.filter;
+        let filter = self.filter.lock().unwrap();
         let f = |w| {
             for rule in &filter.rules {
                 if rule.action == Action::Pin && rule.func.as_ref()(w) {
@@ -417,10 +454,26 @@ impl<'a, 'b> Context<'a, 'b> {
         target_windows
     }
 
-    fn apply_filter(&self, mut target_windows: Vec<Window>) -> WindowStackView {
-        let screen = self.c.get_setup().roots().next().unwrap();
+    /// rebuild filter rule set
+    /// rebuild will clear all adhoc rules and readd them for now, since some 
+    /// conditions can be changed (e.g _NET_CLIENT_LIST_STACKING)
+    fn rebuild_filter(&self) {
+        macro_rules! adhoc {
+            ($filter:ident, $c:expr) => ({
+                let afp = ActionFuncPair {
+                    action: Action::FilterOut,
+                    rule: FilterRule::Adhoc,
+                    func: Box::new( $c )
+                };
+                $filter.add_adhoc_rule(afp);
+            })
+        }
 
-        if self.filter.mapped_only() || self.filter.omit_hidden() {
+        let mut filter = self.filter.lock().unwrap();
+
+        if self.mapped_only() || self.omit_hidden() {
+            // TODO: rewrite with _NET_WM_STATE of window
+            /*
             let has_guard_window = target_windows.iter()
                 .any(|w| w.name.contains("guard window") && w.attrs.override_redirect);
 
@@ -435,54 +488,64 @@ impl<'a, 'b> Context<'a, 'b> {
                     false
                 }
             });
+            */
 
-            if self.filter.mapped_only() {
-                do_filter!(target_windows, filter, |w| { w.attrs.map_state == MapState::Viewable });
+            if self.mapped_only() {
+                adhoc!(filter, |w| { w.attrs.map_state == MapState::Viewable });
             }
 
-            if self.filter.omit_hidden() {
-                do_filter!(target_windows, filter, |w| {
-                    w.geom.x < screen.width_in_pixels() as i16 &&
-                        w.geom.y < screen.height_in_pixels() as i16 &&
+            if self.omit_hidden() {
+                let (screen_width, screen_height) = {
+                    let screen = self.c.get_setup().roots().next().unwrap();
+                    (screen.width_in_pixels(), screen.height_in_pixels())
+                };
+
+                adhoc!(filter, move |w| {
+                    w.geom.x < screen_width as i16 &&
+                        w.geom.y < screen_height as i16 &&
                         (w.geom.width as i16) + w.geom.x > 0 && (w.geom.height as i16) + w.geom.y > 0
                 });
             }
         }
 
-        if self.filter.no_special() {
+        if self.no_special() {
             let specials = hashset!(
                 ("mutter guard window"),
                 ("deepin-metacity guard window"),
                 ("mutter topleft corner window"),
                 ("deepin-metacity topleft corner window"),
                 );
-            do_filter!(target_windows, filter, |w: &Window| { !specials.contains(w.name.as_str()) });
+
+            adhoc!(filter, move |w| !specials.contains(w.name.as_str()));
         }
 
-        if self.filter.rules.len() > 0 {
-            for rule in &self.filter.rules {
-                if rule.action == Action::FilterOut {
-                    do_filter!(target_windows, filter, rule.func.as_ref());
-                }
-            }
+        if self.clients_only() {
+            //FIXME: this is wrong, clients is changing overtime
+            //dont figure out how to solve it, so we need to re-build this 
+            //rule on the air every time clients list gets updated.
+            let clients = self.collect_window_manager_properties();
+            adhoc!(filter, move |w| clients.contains(&w.id));
         }
-
-        target_windows.into_iter().map(|w| w.id).collect()
     }
 
-    fn collect_window_manager_properties(&self) {
+    /// filter windows by applying loaded rules
+    fn apply_filter(&self, windows: &Vec<Window>) -> WindowStackView {
+        let filter = self.filter.lock().unwrap();
+        windows.iter().filter(|w| filter.apply_to(w)).map(|w| w.id).collect()
+    }
+
+    fn collect_window_manager_properties(&self) -> WindowStackView {
         let c = self.c;
 
         let cookie = xcb::get_property(&c, false, self.root, self._net_client_list_stacking_atom, 
                           xcb::xproto::ATOM_WINDOW, 0, std::u32::MAX);
         match cookie.get_reply() {
-            Ok(reply) => {
-                if reply.value_len() > 0 {
+            Ok(ref reply) if reply.value_len() > 0 => {
                     let list = reply.value::<xcb::Window>().to_vec();
                     wm_debug!("CLIENT_LIST: {:#?}", HexedVec(&list));
-                }
+                    list
             },
-            Err(_) => {return}
+            _ => Vec::new()
         }
     }
 
@@ -622,13 +685,11 @@ impl<'a, 'b> Context<'a, 'b> {
 }
 
 
-pub fn monitor(c: &xcb::Connection, filter: &Filter) {
-    let ctx = &Context::new(c, filter);
-
+pub fn monitor(ctx: &Context) {
     let ev_mask: u32 = xproto::EVENT_MASK_SUBSTRUCTURE_NOTIFY;
     xcb::xproto::change_window_attributes(ctx.c, ctx.root,
                                           &[(xcb::xproto::CW_EVENT_MASK, ev_mask)]);
-    c.flush();
+    ctx.c.flush();
 
     ctx.refresh_windows();
 
@@ -671,7 +732,7 @@ pub fn monitor(c: &xcb::Connection, filter: &Filter) {
                             wm_debug!("timedout, reload");
                             println!("delayed configure {:#x} ", cne.window());
 
-                            let diff = if filter.show_diff() {
+                            let diff = if ctx.show_diff() {
                                 Some(hashset!(cne.window(), cne.above_sibling()))
                             } else {
                                 None
@@ -702,7 +763,7 @@ pub fn monitor(c: &xcb::Connection, filter: &Filter) {
                         // assumes that window will be at top when created
                         let new_win = ctx.query_window(cne.window());
                         ctx.update_with(new_win);
-                        let diff = if filter.show_diff() {
+                        let diff = if ctx.show_diff() {
                             Some(hashset!(cne.window()))
                         } else {
                             None
@@ -736,7 +797,7 @@ pub fn monitor(c: &xcb::Connection, filter: &Filter) {
                                 let new_win = ctx.query_window(rne.window());
                                 ctx.update_with(new_win);
 
-                                let diff = if filter.show_diff() {
+                                let diff = if ctx.show_diff() {
                                     Some(hashset!(rne.window()))
                                 } else {
                                     None
@@ -753,7 +814,7 @@ pub fn monitor(c: &xcb::Connection, filter: &Filter) {
                         if ctx.is_window_concerned(cne.window()) {
                             if last_configure_xid != cne.window() {
                                 println!("configure 0x{:x} above: 0x{:x}", cne.window(), cne.above_sibling());
-                                let diff = if filter.show_diff() {
+                                let diff = if ctx.show_diff() {
                                     Some(hashset!(cne.window(), cne.above_sibling()))
                                 } else {
                                     None
@@ -782,7 +843,7 @@ pub fn monitor(c: &xcb::Connection, filter: &Filter) {
 
                             println!("map 0x{:x}", mn.window());
 
-                            let diff = if filter.show_diff() {
+                            let diff = if ctx.show_diff() {
                                 Some(hashset!(mn.window()))
                             } else {
                                 None

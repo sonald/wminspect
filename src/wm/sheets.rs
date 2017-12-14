@@ -47,7 +47,10 @@ impl Filter {
         } {
             wm_debug!("extend_with {:?}", items);
             let mut items = items.into_iter()
-                .map(|item| ActionFuncPair {action: item.action, func: item.rule.gen_closure()})
+                .map(|item| {
+                     let f = item.rule.gen_closure();
+                     ActionFuncPair { action: item.action, rule: item.rule, func: f }
+                })
                 .collect();
             self.rules.append(&mut items);
         }
