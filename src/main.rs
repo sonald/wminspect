@@ -1,6 +1,7 @@
 //#![feature(core_intrinsics)]
 
 extern crate xcb;
+extern crate xcb_util;
 extern crate clap;
 
 #[macro_use]
@@ -41,6 +42,7 @@ pub fn main() {
 
 
     let (c, _) = xcb::Connection::connect(None).unwrap();
+    let ewmh = xcb_util::ewmh::Connection::connect(c).ok().unwrap();
 
     let mut f = match matches.value_of("filter") {
         None => wm::Filter::new(),
@@ -59,7 +61,7 @@ pub fn main() {
         }
     }
 
-    let mut ctx = wm::Context::new(&c, f);
+    let mut ctx = wm::Context::new(&ewmh, f);
 
     if matches.is_present("only-mapped") { ctx.set_mapped_only(); }
     if matches.is_present("colored") { ctx.set_colorful(); }

@@ -53,3 +53,27 @@ not(attrs.map_state=Viewable): pin;
 
 ## ideas
 - better event tracing, add tracepoint dynamically, listen to any property/attrs change 
+- 2.0 wild idea
+    systemtap like dynamic tracing, instead of simple filtering. maybe something like:
+    ```
+    wminspect -f '
+        on:configure_notify(window=by_wm_name:deepin) {
+            print event.x, event.y
+        }
+
+        on:property_notify(window=root, prop=by_name:client_list) {
+            let w = get_window(event.window)
+            print event.timestamp
+        }
+
+        on:create_notify {
+            print wm.client_list_stacking
+        }
+
+        on:window(id=0x6400001) above window(id=0x4800003) {
+            print "window stack changed"
+        }
+    '
+
+    ```
+

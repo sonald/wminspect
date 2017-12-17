@@ -1,4 +1,5 @@
 extern crate xcb;
+extern crate xcb_util;
 extern crate colored;
 extern crate timer;
 extern crate crossbeam;
@@ -169,16 +170,11 @@ pub enum Condition {
 }
 
 pub struct Context<'a> {
-    pub c: &'a xcb::Connection,
+    pub c: &'a xcb_util::ewmh::Connection,
     pub root: xcb::Window,
     filter: Mutex<Filter>,
 
     pub options: Vec<Condition>,
-
-    /// atom caches
-    net_wm_name_atom: xcb::Atom,
-    utf8_string_atom: xcb::Atom,
-    _net_client_list_stacking_atom: xcb::Atom,
 
     //TODO: move into inner struct as one, and save two extra locks
     inner: Mutex<WindowsLayout>,
@@ -242,7 +238,7 @@ impl<'a> Context<'a> {
     build_fun!(show_diff, set_show_diff, ShowDiff);
     build_fun!(clients_only, set_clients_only, ClientsOnly);
 
-    pub fn new(c: &'a xcb::Connection, f: Filter) -> Context<'a> {
+    pub fn new(c: &'a xcb_util::ewmh::Connection, f: Filter) -> Context<'a> {
         let screen = c.get_setup().roots().next().unwrap();
 
         Context {
@@ -250,10 +246,6 @@ impl<'a> Context<'a> {
             root: screen.root(),
             filter: Mutex::new(f),
             options: Vec::new(),
-
-            net_wm_name_atom: xcb::intern_atom(c, false, "_NET_WM_NAME").get_reply().unwrap().atom(),
-            utf8_string_atom: xcb::intern_atom(c, false, "UTF8_STRING").get_reply().unwrap().atom(),
-            _net_client_list_stacking_atom: xcb::intern_atom(c, false, "_NET_CLIENT_LIST_STACKING").get_reply().unwrap().atom(),
 
             inner: Mutex::new(
                 WindowsLayout {
@@ -298,7 +290,10 @@ impl<'a> Context<'a> {
         let filter = self.filter.lock().unwrap();
 
         layout.stack_view.push(wid);
-        layout.filtered_view.push(wid);
+        if filter.apply_to(&w) {
+            layout.filtered_view.push(wid);
+            wm_debug!("filtered_view {:?}", HexedVec(&layout.filtered_view));
+        }
         if w.is_window_pinned(&filter) {
             layout.pinned_windows.insert(wid);
         }
@@ -523,6 +518,7 @@ impl<'a> Context<'a> {
             //FIXME: this is wrong, clients is changing overtime
             //dont figure out how to solve it, so we need to re-build this 
             //rule on the air every time clients list gets updated.
+            //or make boxed closure's lifetime as long as filter instead of static
             let clients = self.collect_window_manager_properties();
             adhoc!(filter, move |w| clients.contains(&w.id));
         }
@@ -537,11 +533,10 @@ impl<'a> Context<'a> {
     fn collect_window_manager_properties(&self) -> WindowStackView {
         let c = self.c;
 
-        let cookie = xcb::get_property(&c, false, self.root, self._net_client_list_stacking_atom, 
-                          xcb::xproto::ATOM_WINDOW, 0, std::u32::MAX);
+        let cookie = xcb_util::ewmh::get_client_list_unchecked(&c, 0);
         match cookie.get_reply() {
-            Ok(ref reply) if reply.value_len() > 0 => {
-                    let list = reply.value::<xcb::Window>().to_vec();
+            Ok(ref reply) => {
+                    let list = reply.windows().to_vec();
                     wm_debug!("CLIENT_LIST: {:#?}", HexedVec(&list));
                     list
             },
@@ -555,8 +550,8 @@ impl<'a> Context<'a> {
         let mut qs: Vec<XcbRequest> = Vec::new();
         qs.push(XcbRequest::GWA(xcb::get_window_attributes(&c, id)));
         qs.push(XcbRequest::GE(xcb::get_geometry(&c, id)));
-        qs.push(XcbRequest::GP(xcb::get_property(&c, false, id, self.net_wm_name_atom,
-                                                 self.utf8_string_atom, 0, std::u32::MAX)));
+        qs.push(XcbRequest::GP(xcb::get_property(&c, false, id, self.c.WM_NAME(),
+                                                 unsafe{&*c.get_raw_conn()}.UTF8_STRING, 0, std::u32::MAX)));
         qs.push(XcbRequest::GP(xcb::get_property(&c, false, id, xcb::xproto::ATOM_WM_NAME, 
                                                  xcb::xproto::ATOM_STRING, 0, std::u32::MAX)));
 
@@ -618,8 +613,8 @@ impl<'a> Context<'a> {
         for w in res.children() {
             qs.push(XcbRequest::GWA(xcb::get_window_attributes(&c, *w)));
             qs.push(XcbRequest::GE(xcb::get_geometry(&c, *w)));
-            qs.push(XcbRequest::GP(xcb::get_property(&c, false, *w, self.net_wm_name_atom,
-                self.utf8_string_atom, 0, std::u32::MAX)));
+            qs.push(XcbRequest::GP(xcb::get_property(&c, false, *w, c.WM_NAME(),
+                                                    unsafe{&*c.get_raw_conn()}.UTF8_STRING, 0, std::u32::MAX)));
             qs.push(XcbRequest::GP(xcb::get_property(&c, false, *w, xcb::xproto::ATOM_WM_NAME, 
                                                      xcb::xproto::ATOM_STRING, 0, std::u32::MAX)));
         }
@@ -686,8 +681,8 @@ impl<'a> Context<'a> {
 
 
 pub fn monitor(ctx: &Context) {
-    let ev_mask: u32 = xproto::EVENT_MASK_SUBSTRUCTURE_NOTIFY;
-    xcb::xproto::change_window_attributes(ctx.c, ctx.root,
+    let ev_mask: u32 = xproto::EVENT_MASK_SUBSTRUCTURE_NOTIFY | xproto::EVENT_MASK_PROPERTY_CHANGE;
+    xcb::xproto::change_window_attributes(&ctx.c, ctx.root,
                                           &[(xcb::xproto::CW_EVENT_MASK, ev_mask)]);
     ctx.c.flush();
 
@@ -750,7 +745,7 @@ pub fn monitor(ctx: &Context) {
 
         let mut last_configure_xid = xcb::WINDOW_NONE;
         loop {
-            if let Some(ev) = ctx.c.poll_for_event() {
+            if let Some(ev) = ctx.c.wait_for_event() {
                 //wm_debug!("event: {}", ev.response_type() & !0x80);
                 match ev.response_type() & !0x80 {
                     xcb::xproto::CREATE_NOTIFY => {
@@ -865,13 +860,23 @@ pub fn monitor(ctx: &Context) {
                         }
                     },
 
+                    xproto::PROPERTY_NOTIFY => {
+                        let pn = as_event::<xcb::PropertyNotifyEvent>(&ev);
+                        if pn.window() == ctx.root {
+                            if pn.atom() == ctx.c.CLIENT_LIST_STACKING() {
+                                //TODO: only update if last event is a destroy/create notify
+                            }
+                        } else {
+                            wm_debug!("prop for {:#x}", pn.window());
+                        }
+                    },
 
                     _ => {
                     },
                 } 
             };
 
-            thread::sleep(time::Duration::from_millis(50));
+            //thread::sleep(time::Duration::from_millis(50));
         }
 
         match tx.send(Message::Quit) {

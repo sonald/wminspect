@@ -8,7 +8,7 @@ build = "build.rs"
 [dependencies]
 libc = "*"
 xcb = {version = "0.8.*", features = ["thread"]}
-xcb-util = "0.2.*"
+xcb-util = {version = "0.2.*", features = ["ewmh", "keysyms", "icccm", "thread"]}
 colored = "1.4"
 timer = "*"
 crossbeam = "*"

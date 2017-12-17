@@ -43,7 +43,7 @@ impl Filter {
     }
 
     pub fn apply_to(&self, w: &Window) -> bool {
-        !self.rules.iter().any(|r| r.action == Action::FilterOut && !(r.func)(w))
+        !self.rules.iter().filter(|r| r.action == Action::FilterOut).any(|r| !(r.func)(w))
     }
 
     pub fn add_adhoc_rule(&mut self, item: ActionFuncPair) {
