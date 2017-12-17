@@ -177,6 +177,18 @@ fn parse_id(id_str: &str) -> u32 {
     }
 } 
 
+macro_rules! _match_geometry {
+    ($elem:tt, $op:tt, $i:tt) => (
+        match *$op {
+            Op::Eq => Box::new(move |ref w| w.geom.$elem == $i),
+            Op::Neq => Box::new(move |ref w| w.geom.$elem != $i),
+            Op::GT => Box::new(move |ref w| w.geom.$elem > $i),
+            Op::LT => Box::new(move |ref w| w.geom.$elem < $i),
+            Op::GE => Box::new(move |ref w| w.geom.$elem >= $i),
+            Op::LE => Box::new(move |ref w| w.geom.$elem <= $i),
+        })
+}
+
 impl FilterRule {
     pub(crate) fn gen_closure(&self) -> FilterFunction {
         use self::FilterRule::*;
@@ -272,48 +284,13 @@ impl FilterRule {
                 }
                 
             },
-            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "x" => {
-                let i = *i;
-                match *op {
-                    Op::Eq => Box::new(move |ref w| w.geom.x == i),
-                    Op::Neq => Box::new(move |ref w| w.geom.x != i),
-                    Op::GT => Box::new(move |ref w| w.geom.x > i),
-                    Op::LT => Box::new(move |ref w| w.geom.x < i),
-                    Op::GE => Box::new(move |ref w| w.geom.x >= i),
-                    Op::LE => Box::new(move |ref w| w.geom.x <= i),
-                }
-            },
-            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "y" => {
-                let i = *i;
-                match *op {
-                    Op::Eq =>  Box::new(move |ref w| w.geom.y == i),
-                    Op::Neq => Box::new(move |ref w| w.geom.y != i),
-                    Op::GT =>  Box::new(move |ref w| w.geom.y > i),
-                    Op::LT =>  Box::new(move |ref w| w.geom.y < i),
-                    Op::GE =>  Box::new(move |ref w| w.geom.y >= i),
-                    Op::LE =>  Box::new(move |ref w| w.geom.y <= i),
-                }
-            },
-            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "width" => {
-                let i = *i as u16;
-                match *op {
-                    Op::Eq =>  Box::new(move |ref w| w.geom.width == i),
-                    Op::Neq => Box::new(move |ref w| w.geom.width != i),
-                    Op::GT =>  Box::new(move |ref w| w.geom.width > i),
-                    Op::LT =>  Box::new(move |ref w| w.geom.width < i),
-                    Op::GE =>  Box::new(move |ref w| w.geom.width >= i),
-                    Op::LE =>  Box::new(move |ref w| w.geom.width <= i),
-                }
-            },
-            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(ref i)) if g == "height" => {
-                let i = *i as u16;
-                match *op {
-                    Op::Eq =>  Box::new(move |ref w| w.geom.height == i),
-                    Op::Neq => Box::new(move |ref w| w.geom.height != i),
-                    Op::GT =>  Box::new(move |ref w| w.geom.height > i),
-                    Op::LT =>  Box::new(move |ref w| w.geom.height < i),
-                    Op::GE =>  Box::new(move |ref w| w.geom.height >= i),
-                    Op::LE =>  Box::new(move |ref w| w.geom.height <= i),
+            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(i)) => {
+                match g.as_str() {
+                    "x" => _match_geometry!(x, op, i),
+                    "y" => _match_geometry!(y, op, i),
+                    "width" => _match_geometry!(width, op, (i as u16)),
+                    "height" => _match_geometry!(height, op, (i as u16)),
+                    wrong @ _ => panic!("wrong geometry attribute {}", wrong)
                 }
             },
 
