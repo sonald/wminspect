@@ -1,6 +1,6 @@
 [package]
 name = "wminspect"
-version = "0.1.0"
+version = "0.3.0"
 authors = ["Sian Cao <yinshuiboy@gmail.com>"]
 links = "xcb"
 build = "build.rs"

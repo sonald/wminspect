@@ -13,6 +13,7 @@ pub mod wm;
 
 pub fn main() {
     let matches = App::new("window manager inspector")
+        .version("0.3.0")
         .args(&[
               Arg::with_name("only-mapped").short("v").long("only-mapped").help("show only mapped windows"),
               Arg::from_usage("-c --colored 'output info with color'"),

@@ -9,7 +9,6 @@ use std;
 use self::colored::*;
 use std::fmt::*;
 use std::time;
-use std::thread;
 use xcb::xproto;
 use std::sync::*;
 use std::sync::atomic::{AtomicBool, self};
@@ -351,7 +350,6 @@ impl<'a> Context<'a> {
         self.rebuild_filter();
         layout.filtered_view = self.apply_filter(&windows);
 
-        wm_debug!("size {}", layout.windows.len());
         //wm_debug!("stack_view: {:?}, \nfiltered_view: {:?}",
                   //HexedVec(&layout.stack_view), HexedVec(&layout.filtered_view));
     }
@@ -460,7 +458,7 @@ impl<'a> Context<'a> {
                     rule: FilterRule::Adhoc,
                     func: Box::new( $c )
                 };
-                $filter.add_adhoc_rule(afp);
+                $filter.add_live_rule(afp);
             })
         }
 
@@ -515,13 +513,39 @@ impl<'a> Context<'a> {
         }
 
         if self.clients_only() {
-            //FIXME: this is wrong, clients is changing overtime
-            //dont figure out how to solve it, so we need to re-build this 
-            //rule on the air every time clients list gets updated.
-            //or make boxed closure's lifetime as long as filter instead of static
-            let clients = self.collect_window_manager_properties();
-            adhoc!(filter, move |w| clients.contains(&w.id));
+            self.update_clients_only_rule_locked(&mut filter);
         }
+    }
+
+    fn update_clients_only_rule_locked(&self, filter: &mut Filter) {
+        //NOTE: clients is changing overtime
+        //dont figure out how to solve it, so we need to re-build this 
+        //rule on the air every time clients list gets updated.
+        //or make boxed closure's lifetime as long as filter instead of static
+        let clients = self.collect_window_manager_properties();
+
+        if let Some(i) = filter.rules.iter().position(|r| r.rule == FilterRule::ClientsOnly) {
+            let r = filter.rules.get_mut(i).unwrap();
+            r.func = Box::new(move |w| clients.contains(&w.id));
+        } else {
+            let afp = ActionFuncPair {
+                action: Action::FilterOut,
+                rule: FilterRule::ClientsOnly,
+                func: Box::new(move |w| clients.contains(&w.id))
+            };
+            filter.rules.push(afp);
+        }
+    }
+
+    pub fn update_clients(&self) {
+        let mut layout = self.inner.lock().unwrap();
+        let mut filter = self.filter.lock().unwrap();
+
+        //self.rebuild_filter();
+        self.update_clients_only_rule_locked(&mut filter);
+
+        layout.filtered_view = layout.windows.iter()
+            .filter(|&(_, w)| filter.apply_to(w)).map(|(_, w)| w.id).collect();
     }
 
     /// filter windows by applying loaded rules
@@ -744,6 +768,7 @@ pub fn monitor(ctx: &Context) {
 
 
         let mut last_configure_xid = xcb::WINDOW_NONE;
+        let mut last_event_type = 0;
         loop {
             if let Some(ev) = ctx.c.wait_for_event() {
                 //wm_debug!("event: {}", ev.response_type() & !0x80);
@@ -864,7 +889,11 @@ pub fn monitor(ctx: &Context) {
                         let pn = as_event::<xcb::PropertyNotifyEvent>(&ev);
                         if pn.window() == ctx.root {
                             if pn.atom() == ctx.c.CLIENT_LIST_STACKING() {
-                                //TODO: only update if last event is a destroy/create notify
+                                if last_event_type == xproto::CREATE_NOTIFY ||
+                                    last_event_type == xproto::DESTROY_NOTIFY {
+                                    ctx.update_clients();
+                                    ctx.dump_windows(None);
+                                }
                             }
                         } else {
                             wm_debug!("prop for {:#x}", pn.window());
@@ -874,9 +903,9 @@ pub fn monitor(ctx: &Context) {
                     _ => {
                     },
                 } 
-            };
 
-            //thread::sleep(time::Duration::from_millis(50));
+                last_event_type = ev.response_type() & !0x80;
+            };
         }
 
         match tx.send(Message::Quit) {

@@ -46,7 +46,7 @@ impl Filter {
         !self.rules.iter().filter(|r| r.action == Action::FilterOut).any(|r| !(r.func)(w))
     }
 
-    pub fn add_adhoc_rule(&mut self, item: ActionFuncPair) {
+    pub fn add_live_rule(&mut self, item: ActionFuncPair) {
         self.rules.push(item);
     }
 }
