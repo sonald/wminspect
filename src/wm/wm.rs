@@ -174,6 +174,8 @@ pub struct Context<'a> {
     filter: Mutex<Filter>,
 
     pub options: Vec<Condition>,
+    
+    clients_pending_update: Mutex<bool>,
 
     //TODO: move into inner struct as one, and save two extra locks
     inner: Mutex<WindowsLayout>,
@@ -246,6 +248,8 @@ impl<'a> Context<'a> {
             filter: Mutex::new(f),
             options: Vec::new(),
 
+            clients_pending_update: Mutex::new(false),
+
             inner: Mutex::new(
                 WindowsLayout {
                     windows:  HashMap::new(),
@@ -297,6 +301,7 @@ impl<'a> Context<'a> {
             layout.pinned_windows.insert(wid);
         }
         layout.windows.entry(w.id).or_insert(w);
+        *self.clients_pending_update.lock().unwrap() = true;
     }
 
     pub fn update_pin_state(&self, wid: xcb::Window) {
@@ -322,6 +327,7 @@ impl<'a> Context<'a> {
         layout.stack_view.retain(|&w| w != wid);
         layout.filtered_view.retain(|&w| w != wid);
         layout.pinned_windows.retain(|&w| w != wid);
+        *self.clients_pending_update.lock().unwrap() = true;
     }
 
     /// lock and call `f`, do not call any locking operations in `f`
@@ -537,15 +543,26 @@ impl<'a> Context<'a> {
         }
     }
 
-    pub fn update_clients(&self) {
-        let mut layout = self.inner.lock().unwrap();
-        let mut filter = self.filter.lock().unwrap();
+    /// update clients related rule if necessary 
+    /// return true if updated or false when nothing to be done
+    pub fn update_clients(&self) -> bool {
+        let update = *self.clients_pending_update.lock().unwrap();
 
-        //self.rebuild_filter();
-        self.update_clients_only_rule_locked(&mut filter);
+        if update {
+            let mut layout = self.inner.lock().unwrap();
+            let mut filter = self.filter.lock().unwrap();
 
-        layout.filtered_view = layout.windows.iter()
-            .filter(|&(_, w)| filter.apply_to(w)).map(|(_, w)| w.id).collect();
+            //TODO: check if clients really changed ?
+            //self.rebuild_filter();
+            self.update_clients_only_rule_locked(&mut filter);
+
+            layout.filtered_view = layout.windows.iter()
+                .filter(|&(_, w)| filter.apply_to(w)).map(|(_, w)| w.id).collect();
+
+            *self.clients_pending_update.lock().unwrap() = false;
+        }
+
+        update
     }
 
     /// filter windows by applying loaded rules
@@ -768,7 +785,6 @@ pub fn monitor(ctx: &Context) {
 
 
         let mut last_configure_xid = xcb::WINDOW_NONE;
-        let mut last_event_type = 0;
         loop {
             if let Some(ev) = ctx.c.wait_for_event() {
                 //wm_debug!("event: {}", ev.response_type() & !0x80);
@@ -887,24 +903,16 @@ pub fn monitor(ctx: &Context) {
 
                     xproto::PROPERTY_NOTIFY => {
                         let pn = as_event::<xcb::PropertyNotifyEvent>(&ev);
-                        if pn.window() == ctx.root {
-                            if pn.atom() == ctx.c.CLIENT_LIST_STACKING() {
-                                if last_event_type == xproto::CREATE_NOTIFY ||
-                                    last_event_type == xproto::DESTROY_NOTIFY {
-                                    ctx.update_clients();
-                                    ctx.dump_windows(None);
-                                }
+                        if pn.atom() == ctx.c.CLIENT_LIST_STACKING() {
+                            if ctx.update_clients() {
+                                ctx.dump_windows(None);
                             }
-                        } else {
-                            wm_debug!("prop for {:#x}", pn.window());
                         }
                     },
 
                     _ => {
                     },
                 } 
-
-                last_event_type = ev.response_type() & !0x80;
             };
         }
 
