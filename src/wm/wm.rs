@@ -182,10 +182,12 @@ pub struct Context<'a> {
     
 }
 
+//TODO: property changes over time
 pub enum XcbRequest<'a> {
     GWA(xcb::GetWindowAttributesCookie<'a>),
     GE(xcb::GetGeometryCookie<'a>),
     GP(xcb::GetPropertyCookie<'a>),
+    GWN(xcb_util::ewmh::GetWmNameCookie<'a>),
 }
 
 #[derive(Clone)]
@@ -591,10 +593,7 @@ impl<'a> Context<'a> {
         let mut qs: Vec<XcbRequest> = Vec::new();
         qs.push(XcbRequest::GWA(xcb::get_window_attributes(&c, id)));
         qs.push(XcbRequest::GE(xcb::get_geometry(&c, id)));
-        qs.push(XcbRequest::GP(xcb::get_property(&c, false, id, self.c.WM_NAME(),
-                                                 unsafe{&*c.get_raw_conn()}.UTF8_STRING, 0, std::u32::MAX)));
-        qs.push(XcbRequest::GP(xcb::get_property(&c, false, id, xcb::xproto::ATOM_WM_NAME, 
-                                                 xcb::xproto::ATOM_STRING, 0, std::u32::MAX)));
+        qs.push(XcbRequest::GWN(xcb_util::ewmh::get_wm_name_unchecked(&c, id)));
 
         macro_rules! apply_reply {
             ($win:ident $cookie:ident $reply:ident $e:expr) => (
@@ -634,13 +633,13 @@ impl<'a> Context<'a> {
                         };
                     })
                 },
-                XcbRequest::GP(cookie) => {
+                XcbRequest::GWN(cookie) => {
                     apply_reply!(win cookie reply {
-                        if reply.value_len() > 0 && win.name.len() == 0 {
-                            win.name = String::from_utf8(reply.value::<u8>().to_vec()).unwrap_or("".to_string());
-                        }
+                        win.name = reply.string().to_string();
                     })
                 },
+
+                _ => {}
             }
         }
 
@@ -654,25 +653,25 @@ impl<'a> Context<'a> {
         for w in res.children() {
             qs.push(XcbRequest::GWA(xcb::get_window_attributes(&c, *w)));
             qs.push(XcbRequest::GE(xcb::get_geometry(&c, *w)));
-            qs.push(XcbRequest::GP(xcb::get_property(&c, false, *w, c.WM_NAME(),
-                                                    unsafe{&*c.get_raw_conn()}.UTF8_STRING, 0, std::u32::MAX)));
-            qs.push(XcbRequest::GP(xcb::get_property(&c, false, *w, xcb::xproto::ATOM_WM_NAME, 
-                                                     xcb::xproto::ATOM_STRING, 0, std::u32::MAX)));
+            qs.push(XcbRequest::GWN(xcb_util::ewmh::get_wm_name_unchecked(&c, *w)));
         }
 
         macro_rules! apply_reply {
             ($win:ident $cookie:ident $reply:ident $e:expr) => (
                 match $cookie.get_reply() {
                     Ok($reply) => $e,
-                    Err(_) => $win.valid = false,
+                    Err(err) => {
+                        wm_debug!("---######### {:?}", err);
+                        $win.valid = false
+                    },
                 })
         }
 
         let mut windows = Vec::with_capacity(res.children_len() as usize);
         let window_ids = res.children();
         for (i, query) in qs.into_iter().enumerate() {
-            let idx = i / 4;
-            if i % 4 == 0 {
+            let idx = i / 3;
+            if i % 3 == 0 {
                 windows.push(Window {
                     id: window_ids[idx],
                     name: "".to_string(),
@@ -704,13 +703,13 @@ impl<'a> Context<'a> {
                             };
                         })
                     },
-                    XcbRequest::GP(cookie) => {
+                    XcbRequest::GWN(cookie) => {
                         apply_reply!(win cookie reply {
-                            if reply.value_len() > 0 && win.name.len() == 0 {
-                                win.name = String::from_utf8(reply.value::<u8>().to_vec()).unwrap_or("".to_string());
-                            }
+                            win.name = reply.string().to_string();
                         })
                     },
+
+                    _ => {}
                 }
             }
 
