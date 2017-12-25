@@ -10,6 +10,7 @@ use self::colored::*;
 use std::fmt::*;
 use std::time;
 use xcb::xproto;
+use xcb_util::ewmh;
 use std::sync::*;
 use std::sync::atomic::{AtomicBool, self};
 use std::collections::{HashMap, HashSet};
@@ -169,7 +170,7 @@ pub enum Condition {
 }
 
 pub struct Context<'a> {
-    pub c: &'a xcb_util::ewmh::Connection,
+    pub c: &'a ewmh::Connection,
     pub root: xcb::Window,
     filter: Mutex<Filter>,
 
@@ -187,7 +188,7 @@ pub enum XcbRequest<'a> {
     GWA(xcb::GetWindowAttributesCookie<'a>),
     GE(xcb::GetGeometryCookie<'a>),
     GP(xcb::GetPropertyCookie<'a>),
-    GWN(xcb_util::ewmh::GetWmNameCookie<'a>),
+    GWN(ewmh::GetWmNameCookie<'a>),
 }
 
 #[derive(Clone)]
@@ -241,7 +242,7 @@ impl<'a> Context<'a> {
     build_fun!(show_diff, set_show_diff, ShowDiff);
     build_fun!(clients_only, set_clients_only, ClientsOnly);
 
-    pub fn new(c: &'a xcb_util::ewmh::Connection, f: Filter) -> Context<'a> {
+    pub fn new(c: &'a ewmh::Connection, f: Filter) -> Context<'a> {
         let screen = c.get_setup().roots().next().unwrap();
 
         Context {
@@ -576,7 +577,7 @@ impl<'a> Context<'a> {
     fn collect_window_manager_properties(&self) -> WindowStackView {
         let c = self.c;
 
-        let cookie = xcb_util::ewmh::get_client_list_unchecked(&c, 0);
+        let cookie = ewmh::get_client_list_unchecked(&c, 0);
         match cookie.get_reply() {
             Ok(ref reply) => {
                     let list = reply.windows().to_vec();
@@ -593,7 +594,7 @@ impl<'a> Context<'a> {
         let mut qs: Vec<XcbRequest> = Vec::new();
         qs.push(XcbRequest::GWA(xcb::get_window_attributes(&c, id)));
         qs.push(XcbRequest::GE(xcb::get_geometry(&c, id)));
-        qs.push(XcbRequest::GWN(xcb_util::ewmh::get_wm_name_unchecked(&c, id)));
+        qs.push(XcbRequest::GWN(ewmh::get_wm_name_unchecked(&c, id)));
 
         macro_rules! apply_reply {
             ($win:ident $cookie:ident $reply:ident $e:expr) => (
@@ -653,7 +654,7 @@ impl<'a> Context<'a> {
         for w in res.children() {
             qs.push(XcbRequest::GWA(xcb::get_window_attributes(&c, *w)));
             qs.push(XcbRequest::GE(xcb::get_geometry(&c, *w)));
-            qs.push(XcbRequest::GWN(xcb_util::ewmh::get_wm_name_unchecked(&c, *w)));
+            qs.push(XcbRequest::GWN(ewmh::get_wm_name_unchecked(&c, *w)));
         }
 
         macro_rules! apply_reply {
@@ -669,6 +670,9 @@ impl<'a> Context<'a> {
 
         let mut windows = Vec::with_capacity(res.children_len() as usize);
         let window_ids = res.children();
+
+        let ev_mask: u32 = xproto::EVENT_MASK_STRUCTURE_NOTIFY | xproto::EVENT_MASK_PROPERTY_CHANGE |
+            xproto::EVENT_MASK_FOCUS_CHANGE;
         for (i, query) in qs.into_iter().enumerate() {
             let idx = i / 3;
             if i % 3 == 0 {
@@ -680,6 +684,9 @@ impl<'a> Context<'a> {
                     valid: true,
                 });
             }
+
+            xcb::xproto::change_window_attributes(&c, window_ids[idx],
+                                                  &[(xcb::xproto::CW_EVENT_MASK, ev_mask)]);
 
             if let Some(win) = windows.last_mut() {
                 match query {
@@ -781,6 +788,22 @@ pub fn monitor(ctx: &Context) {
 
             });
         }
+
+        //TODO: name change should invalidate some rules and we need to re-triggerit
+        let handle_property_event = |pn: &xcb::PropertyNotifyEvent| {
+            if pn.atom() == ctx.c.WM_NAME() {
+                ctx.with_window_mut(pn.window(), |w| {
+                    let cookie = ewmh::get_wm_name_unchecked(&ctx.c, w.id);
+                    match cookie.get_reply() {
+                        Ok(reply) => {
+                            w.name = reply.string().to_string();
+                            wm_debug!("name updated {:#x} -> {}", pn.window(), w.name);
+                        },
+                        _ => {}
+                    }
+                });
+            }
+        };
 
 
         let mut last_configure_xid = xcb::WINDOW_NONE;
@@ -902,10 +925,14 @@ pub fn monitor(ctx: &Context) {
 
                     xproto::PROPERTY_NOTIFY => {
                         let pn = as_event::<xcb::PropertyNotifyEvent>(&ev);
-                        if pn.atom() == ctx.c.CLIENT_LIST_STACKING() {
-                            if ctx.update_clients() {
-                                ctx.dump_windows(None);
+                        if pn.window() == ctx.root {
+                            if pn.atom() == ctx.c.CLIENT_LIST_STACKING() {
+                                if ctx.update_clients() {
+                                    ctx.dump_windows(None);
+                                }
                             }
+                        } else {
+                            handle_property_event(pn);
                         }
                     },
 

@@ -34,16 +34,16 @@ not(attrs.map_state=Viewable): pin;
 - [x] do idle update
 - [x] use DSL to specify filter rule (partially)
 - [x] highlight diffs across events
-- [x] pin windows (highlight some windows everlasting) 
+- [ ] pin windows (highlight some windows everlasting) 
 - [ ] ignore some events
-- [ ] (de)serialize rules from/into disk 
+- [x] (de)serialize rules from/into disk 
 - [ ] event timestamp?
 - [ ] rule databases (based on serialization)
 - [x] cut off long name display 
 - [ ] change rules on the fly (so I can change the set of monitored windows without restart)
 - [ ] xrandr events may affect definition of visible
 - [ ] on macOS, client id should be child of queried window
-- [ ] query_tree is heavy, need to cache window stack like mutter does
+- [x] query_tree is heavy, need to cache window stack like mutter does
 - [ ] expand grammar to support window properties
 - [ ] expand grammar to support conditional expression
 - [ ] add gui support
