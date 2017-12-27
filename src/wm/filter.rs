@@ -614,6 +614,7 @@ pub fn filter_grammar() ->&'static str {
     return "grammar:
     top -> ( item ( ';' item )* )?
     item -> cond ( ':' action)? 
+        | 'clients'
     cond -> pred op VAL
         | ANY '(' cond (',' cond )* ')'
         | ALL '(' cond (',' cond )* ')'
