@@ -742,7 +742,7 @@ pub fn monitor(ctx: &Context) {
 
     crossbeam::scope(|scope| {
         {
-            scope.spawn(move || {
+            scope.spawn(move |_| {
                 let idle_configure_timeout = time::Duration::from_millis(50);
                 let mut last_checked_time = time::Instant::now();
 
@@ -946,16 +946,17 @@ pub fn monitor(ctx: &Context) {
             Ok(_) => {},
             Err(_) => {wm_debug!("send message error")}
         }
-    });
+    }).unwrap();
 }
 
 fn get_tty_cols() -> Option<usize> {
-    let mut winsz: libc::winsize;
     unsafe {
-        winsz = std::mem::uninitialized();
-        match libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, 
-                          &mut winsz as *mut libc::winsize) {
-            0 => Some(winsz.ws_col as usize),
+        // winsz = std::mem::uninitialized();
+        let mut winsz = std::mem::MaybeUninit::<libc::winsize>::uninit();
+        match libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, winsz.as_mut_ptr()) {
+            0 => {
+                Some(winsz.assume_init().ws_col as usize)
+            },
             _ => None
         }
     }

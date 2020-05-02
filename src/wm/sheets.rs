@@ -31,7 +31,7 @@ impl Filter {
         #[inline]
         fn load_bin_form(data: &str) -> Option<Vec<FilterItem>> {
             wm_debug!("load_bin_form");
-            bc::deserialize_from(&mut data.as_bytes(), bc::Infinite).ok()
+            bc::deserialize_from(&mut data.as_bytes()).ok()
         }
 
         #[inline]
@@ -62,8 +62,6 @@ impl Filter {
     /// two serialized forms: .json and .bin
     ///
     pub fn load_sheet<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        use std::io::Read;
-
         if !path.as_ref().exists() {
             wm_debug!("{:?} does not exists", path.as_ref());
             return self;
@@ -140,7 +138,7 @@ impl Filter {
                         .map_err(|e| format!("json: {}", e))
                 },
                 (Some(rule), b"bin") => {
-                    bc::serialize_into(&mut dest, &rule, bc::Infinite)
+                    bc::serialize_into(&mut dest, &rule)
                         .map_err(|e| format!("bin: {}", e))
                 },
                 _ => { Err("invalid extension".to_string()) }

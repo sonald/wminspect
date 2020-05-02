@@ -1,9 +1,9 @@
-## build
+## build and run
 
-on mac os, install xquartz, and then
+just
 ```
-    export LIBRARY_PATH=/opt/X11/lib
     cargo build --release
+    cargo run
 ```
 
 ## Design
@@ -52,7 +52,8 @@ not(attrs.map_state=Viewable): pin;
 
 
 ## ideas
-- better event tracing, add tracepoint dynamically, listen to any property/attrs change 
+- better event tracing, add tracepoint dynamically, listen to any property/attrs change
+- use SQL syntax for rules
 - 2.0 wild idea
     systemtap like dynamic tracing, instead of simple filtering. maybe something like:
     ```

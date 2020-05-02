@@ -6,7 +6,7 @@ use super::wm::*;
 use std::collections::HashSet;
 use std::convert::AsRef;
 
-type FilterFunction = Box<Fn(&Window) -> bool + Send>;
+type FilterFunction = Box<dyn Fn(&Window) -> bool + Send>;
 
 pub struct ActionFuncPair {
     pub action: Action,
