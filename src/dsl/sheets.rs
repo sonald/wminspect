@@ -5,6 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::fs::{File, create_dir_all};
 use std::io::Read;
 use super::filter::{scan_tokens, parse_rule, Filter, ActionFuncPair, FilterItem};
+use crate::{wm_trace, wm_error};
 extern crate serde_json;
 extern crate bincode as bc;
 
@@ -30,13 +31,13 @@ impl Filter {
 
         #[inline]
         fn load_bin_form(data: &str) -> Option<Vec<FilterItem>> {
-            wm_debug!("load_bin_form");
-            bc::deserialize_from(&mut data.as_bytes()).ok()
+            wm_trace!("load_bin_form");
+            bincode::deserialize(data.as_bytes()).ok()
         }
 
         #[inline]
         fn load_json_form(data: &str) -> Option<Vec<FilterItem>> {
-            wm_debug!("load_json_form");
+            wm_trace!("load_json_form");
             serde_json::from_str::<Vec<FilterItem>>(data).ok()
         }
         if let Some(items) = match format {
@@ -45,7 +46,7 @@ impl Filter {
             SheetFormat::Plain => load_action_pairs(data.as_ref()),
             _ => None
         } {
-            wm_debug!("extend_with {:?}", items);
+            wm_trace!("extend_with {:?}", items);
             let mut items = items.into_iter()
                 .map(|item| {
                      let f = item.rule.gen_closure();
@@ -63,7 +64,7 @@ impl Filter {
     ///
     pub fn load_sheet<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         if !path.as_ref().exists() {
-            wm_debug!("{:?} does not exists", path.as_ref());
+            wm_error!("{:?} does not exists", path.as_ref());
             return self;
         }
 
@@ -87,7 +88,7 @@ impl Filter {
             };
             self.extend_with(&data, format);
         } else {
-            wm_debug!("load sheet from {:?} failed", path.as_ref());
+            wm_error!("load sheet from {:?} failed", path.as_ref());
         }
 
         self
@@ -95,10 +96,10 @@ impl Filter {
 
     /// Compile rule from disk file into json or bincode format
     pub fn compile<S: AsRef<Path>, P: AsRef<Path>>(rule: S, out: P) {
-        wm_debug!("compile {:?} to {:?}", rule.as_ref(), out.as_ref());
+        wm_trace!("compile {:?} to {:?}", rule.as_ref(), out.as_ref());
 
         if !rule.as_ref().exists() {
-            wm_debug!("{:?} does not exists", rule.as_ref());
+            wm_error!("{:?} does not exists", rule.as_ref());
             return ;
         }
 
@@ -126,7 +127,7 @@ impl Filter {
 
             let mut dest = match File::create(out.as_ref()) {
                 Err(e) => {
-                    wm_debug!("create {:?} failed: {}", out.as_ref(), e);
+                    wm_error!("create {:?} failed: {}", out.as_ref(), e);
                     return;
                 }, 
                 Ok(v) => v
@@ -138,17 +139,22 @@ impl Filter {
                         .map_err(|e| format!("json: {}", e))
                 },
                 (Some(rule), b"bin") => {
-                    bc::serialize_into(&mut dest, &rule)
+                    bincode::serialize(&rule)
                         .map_err(|e| format!("bin: {}", e))
+                        .and_then(|data| {
+                            use std::io::Write;
+                            dest.write_all(&data)
+                                .map_err(|e| format!("write: {}", e))
+                        })
                 },
                 _ => { Err("invalid extension".to_string()) }
             };
 
-            wm_debug!("compile {}", if result.is_err() {
-                format!("failed: {}", result.err().unwrap())
+            if result.is_err() {
+                wm_error!("compile failed: {}", result.err().unwrap());
             } else {
-                "done".to_string()
-            });
+                wm_trace!("compile done");
+            }
         }
     }
 }

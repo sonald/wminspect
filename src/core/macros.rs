@@ -10,18 +10,9 @@ macro_rules! hashset {
     ( $( $e:expr, )+ ) => ( hashset!( $($e),+ ) );
 }
 
-macro_rules! wm_debug {
-    ( $($a:tt)* ) => (
-        if cfg!(debug_assertions) {
-            let (f, l) = (file!(), line!());
-            print!("{}:{}: ", f, l);
-            println!{$($a)*}; 
-        })
-}
-
 #[cfg(feature = "core_intrinsics")]
 pub fn print_type_of<T>(_: &T) {
-    wm_debug!("{}", unsafe { std::intrinsics::type_name::<T>() });
+    println!("{}", unsafe { std::intrinsics::type_name::<T>() });
 }
 
 #[cfg(not(feature = "core_intrinsics"))]

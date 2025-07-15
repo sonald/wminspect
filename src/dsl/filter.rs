@@ -2,9 +2,12 @@ extern crate serde;
 extern crate serde_json;
 extern crate bincode as bc;
 
-use super::wm::*;
+use crate::core::types::*;
+use crate::core::wildcard::OptimizedWildcardMatcher;
+use crate::{wm_trace, wm_error};
 use std::collections::HashSet;
 use std::convert::AsRef;
+use serde::{Serialize, Deserialize};
 
 type FilterFunction = Box<dyn Fn(&Window) -> bool + Send>;
 
@@ -14,6 +17,17 @@ pub struct ActionFuncPair {
     pub func: FilterFunction
 }
 
+impl std::fmt::Debug for ActionFuncPair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActionFuncPair")
+            .field("action", &self.action)
+            .field("rule", &self.rule)
+            .field("func", &"<function>")
+            .finish()
+    }
+}
+
+#[derive(Debug)]
 pub struct Filter {
     pub rules: Vec<ActionFuncPair>
 }
@@ -33,7 +47,7 @@ impl Filter {
         let mut tokens = scan_tokens(rule);
         if let Some(top) = parse_rule(&mut tokens) {
             for item in top.into_iter() {
-                wm_debug!("item: {:?}", item);
+                wm_trace!("item: {:?}", item);
                 let f = item.rule.gen_closure();
                 filter.rules.push(ActionFuncPair { action: item.action, rule: item.rule, func: f});
             }
@@ -49,6 +63,31 @@ impl Filter {
     pub fn add_live_rule(&mut self, item: ActionFuncPair) {
         self.rules.push(item);
     }
+
+    /// Clear all rules
+    pub fn clear_rules(&mut self) {
+        self.rules.clear();
+    }
+
+    /// Replace all rules with new ones
+    pub fn replace_rules(&mut self, new_rules: Vec<ActionFuncPair>) {
+        self.rules = new_rules;
+    }
+
+    /// Get rule count
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
+    /// Get pinned window count from rules
+    pub fn pinned_rule_count(&self) -> usize {
+        self.rules.iter().filter(|r| r.action == Action::Pin).count()
+    }
+
+    /// Get filter rule count
+    pub fn filter_rule_count(&self) -> usize {
+        self.rules.iter().filter(|r| r.action == Action::FilterOut).count()
+    }
 }
 
 
@@ -59,7 +98,7 @@ pub enum Action {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Predicate {
+pub enum Predicate {
     Id,
     Name,
     Attr(String), // String contains attr name (map_state or override_redirect)
@@ -67,7 +106,7 @@ pub(crate) enum Predicate {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Matcher {
+pub enum Matcher {
     IntegralValue(i16),
     BoolValue(bool),
     MapStateValue(MapState),
@@ -75,7 +114,7 @@ pub(crate) enum Matcher {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub(crate) enum Op {
+pub enum Op {
     Eq,
     Neq,
     GT,
@@ -85,7 +124,7 @@ pub(crate) enum Op {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub(crate) enum FilterRule {
+pub enum FilterRule {
     Adhoc,
     ClientsOnly,
     Single { pred: Predicate, op: Op, matcher: Matcher },
@@ -95,14 +134,14 @@ pub(crate) enum FilterRule {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub(crate) struct FilterItem {
-    pub(crate) action: Action,
-    pub(crate) rule: FilterRule,
+pub struct FilterItem {
+    pub action: Action,
+    pub rule: FilterRule,
 }
 
 type BoxedRule = Box<FilterRule>;
 
-fn wild_match(pat: &str, s: &str) -> bool {
+pub fn wild_match(pat: &str, s: &str) -> bool {
     // non recursive algorithm
     fn mat2(pat: &[char], s: &[char]) -> bool {
         let (mut i, mut j) = (0, 0);
@@ -251,8 +290,8 @@ impl FilterRule {
             (&Predicate::Name, op, &Matcher::Wildcard(ref pat)) => {
                 let pat = pat.clone();
                 match *op {
-                    Op::Eq => Box::new(move |ref w| wild_match(&pat, &w.name)),
-                    Op::Neq => Box::new(move |ref w| !wild_match(&pat, &w.name)),
+                    Op::Eq => Box::new(move |ref w| OptimizedWildcardMatcher::match_pattern(&pat, &w.name)),
+                    Op::Neq => Box::new(move |ref w| !OptimizedWildcardMatcher::match_pattern(&pat, &w.name)),
                     _ => {panic!("name can only use Eq|Neq as op")}
                 }
                 
@@ -260,7 +299,7 @@ impl FilterRule {
             (&Predicate::Id, &Op::Eq, &Matcher::Wildcard(ref id)) => {
                 let id = id.clone();
                 if is_wild_string(&id) {
-                    Box::new(move |ref w| wild_match(&id, &format!("0x{:x}", w.id)))
+                    Box::new(move |ref w| OptimizedWildcardMatcher::match_pattern(&id, &format!("0x{:x}", w.id)))
                 } else {
                     let i = parse_id(&id);
                     Box::new(move |ref w| w.id == i)
@@ -305,7 +344,7 @@ impl FilterRule {
 
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) enum Token {
+pub enum Token {
     OP(Op),
     StrLit(String), // ID or VALUE
     ACTION(Action),
@@ -325,7 +364,7 @@ use std::collections::VecDeque;
 pub(crate) type Tokens = VecDeque<Token>;
 
 /// parse `Tokens` into FilterItem list
-pub(crate) fn parse_rule(tokens: &mut Tokens) -> Option<Vec<FilterItem>> {
+pub fn parse_rule(tokens: &mut Tokens) -> Option<Vec<FilterItem>> {
     use self::Token::*;
 
     let mut items = Vec::new();
@@ -355,7 +394,7 @@ fn parse_item(tokens: &mut Tokens) -> Option<FilterItem> {
                 tokens.pop_front();
                 match tokens.pop_front().unwrap() {
                     ACTION(act) => action = act,
-                    _ => {wm_debug!("ignore wrong action")}
+                    _ => {wm_error!("ignore wrong action"); }
                 }
             }
 
@@ -395,7 +434,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                         assert!(name == "map_state" || name == "override_redirect");
                         pred = Predicate::Attr(name);
                     } else {
-                        wm_debug!("wrong token");
+                        wm_error!("wrong token: {:?}", tk);
                     }
                 },
                 "geom" => {
@@ -405,7 +444,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                         assert!(name == "x" || name == "y" || name == "width" || name == "height");
                         pred = Predicate::Geom(name);
                     } else {
-                        wm_debug!("wrong token");
+                        wm_error!("wrong token: {:?}", tk);
                     }
                 },
 
@@ -417,7 +456,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                     return Some(FilterRule::ClientsOnly);
                 },
 
-                _ => { wm_debug!("wrong token"); }
+                _ => { wm_error!("wrong token: {:?}", s); }
             }
 
             assert!(tokens.len() >= 2);
@@ -452,7 +491,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                 }, 
 
                 _ => {
-                    wm_debug!("wrong rule");
+                    wm_error!("wrong rule");
                     None
                 } 
             }
@@ -486,11 +525,11 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                 None
             }
         },
-        _ => { wm_debug!("wrong match: [{:?}]", tk); None } 
+        _ => { wm_error!("wrong match: [{:?}]", tk); None }
     }
 }
 
-pub(crate) fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
+pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
     use self::Token::*;
     macro_rules! append_tok {
         ($tokens:tt, $tk:expr) => ({
@@ -635,12 +674,51 @@ pred could be:
 }
 
 #[cfg(test)]
+mod more_tests {
+    use super::*;
+    use pretty_assertions::assert_eq; // For better assertion messages
+
+    #[test]
+    fn test_scan_tokens_edge_cases() {
+        let tokens = scan_tokens("all(name = 'example', id = 0x123);");
+        assert_eq!(tokens.len(), 12);
+    }
+
+    #[test]
+    fn test_parser_ast_equality() {
+        let mut tokens = scan_tokens("name = example;");
+        let parsed1 = parse_rule(&mut tokens);
+        let serialized = serde_json::to_string(&parsed1).unwrap();
+        let deserialized: Vec<FilterItem> = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(parsed1, Some(deserialized));
+    }
+
+    #[test]
+    fn test_wildcard_matching() {
+        assert!(wild_match("exa?ple", "example"));
+        assert!(!wild_match("exa?ple", "samples"));
+    }
+
+    #[test]
+    fn test_serde_round_trip() {
+        let item = FilterItem {
+            action: Action::Pin,
+            rule: FilterRule::ClientsOnly
+        };
+        let serialized = serde_json::to_string(&item).unwrap();
+        let deserialized: FilterItem = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(item, deserialized);
+    }
+}
 mod tests {
     use super::*;
     use super::Token::*;
 
+    #[allow(unused_macros)]
     macro_rules! append_tok {
-        ($tokens:tt, $tk:expr) => ( $tokens.push_back($tk); )
+        ($tokens:expr, $tk:expr) => {
+            $tokens.push_back($tk);
+        }
     }
 
     #[test]

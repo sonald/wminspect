@@ -1,0 +1,209 @@
+.TH WMINSPECT 1 "2024-01-01" "wminspect 0.3.0" "User Commands"
+.SH NAME
+wminspect \- X11 window manager inspector and monitor
+.SH SYNOPSIS
+.B wminspect
+[\fIOPTIONS\fR]
+.br
+.B wminspect
+\fBmonitor\fR
+.br
+.B wminspect
+\fBsheet\fR [\fB\-\-load\fR \fIPATH\fR | \fB\-\-compile\fR \fIINPUT\fR \fIOUTPUT\fR]
+.SH DESCRIPTION
+.B wminspect
+is a comprehensive tool for inspecting X11 window manager state and monitoring window events in real-time. It provides detailed information about windows, their properties, geometry, and attributes, with support for filtering and customizable output formats.
+.PP
+The tool can operate in two main modes: inspection mode (default) which shows a snapshot of current windows, and monitor mode which watches for window events continuously.
+.SH OPTIONS
+.TP
+\fB\-v\fR, \fB\-\-only\-mapped\fR
+Show only mapped windows, excluding unmapped and hidden windows from the output.
+.TP
+\fB\-c\fR, \fB\-\-colored\fR
+Enable colored output for better readability. Colors help distinguish different types of information.
+.TP
+\fB\-\-concise\fR
+Use concise output format with less verbose information. Shows only essential window details.
+.TP
+\fB\-\-no\-color\fR
+Disable colored output completely, useful for scripting or when colors are not supported.
+.TP
+\fB\-m\fR, \fB\-\-monitor\fR
+Run in monitor mode to watch for window events in real-time. Shows changes as they occur.
+.TP
+\fB\-f\fR, \fB\-\-filter\fR \fIRULE\fR
+Apply filtering rules to the window collection. Use \fB\-\-show\-grammar\fR to see rule syntax.
+.TP
+\fB\-o\fR, \fB\-\-omit\-hidden\fR
+Omit hidden or iconified windows from the output.
+.TP
+\fB\-O\fR, \fB\-\-no\-override\-redirect\fR
+Ignore override-redirect windows such as popups, tooltips, and menus.
+.TP
+\fB\-s\fR, \fB\-\-no\-special\fR
+Ignore special windows like docks, panels, and desktop windows.
+.TP
+\fB\-n\fR, \fB\-\-num\fR
+Show event sequence numbers in monitor mode to track the order of events.
+.TP
+\fB\-d\fR, \fB\-\-diff\fR
+Highlight differences between consecutive events in monitor mode.
+.TP
+\fB\-C\fR, \fB\-\-clients\-only\fR
+Trace only client windows that are managed by the window manager.
+.TP
+\fB\-\-show\-grammar\fR
+Show detailed grammar for filter rule syntax and exit.
+.SH SUBCOMMANDS
+.TP
+\fBmonitor\fR
+Run in monitor mode (equivalent to \fB\-m\fR flag). Watches for window events in real-time.
+.TP
+\fBsheet\fR
+Manage filter rule sheets. Supports loading and compiling rule collections.
+.RS
+.TP
+\fB\-\-load\fR \fIPATH\fR
+Load filter rules from a sheet file. Supports .json, .bin, and .rule formats.
+.TP
+\fB\-\-compile\fR \fIINPUT\fR \fIOUTPUT\fR
+Compile a human-readable .rule file into binary (.bin) or JSON (.json) format for faster loading.
+.RE
+.SH FILTER RULES
+Filter rules allow you to select specific windows based on their properties. The rule syntax supports:
+.PP
+.B Predicates:
+.RS
+.IP \(bu 2
+\fBname\fR - Window name/title
+.IP \(bu 2
+\fBid\fR - Window ID (hex or decimal)
+.IP \(bu 2
+\fBattrs.map_state\fR - Window mapping state (viewable, unmapped, unviewable)
+.IP \(bu 2
+\fBattrs.override_redirect\fR - Override-redirect flag (true/false)
+.IP \(bu 2
+\fBgeom.x\fR, \fBgeom.y\fR - Window position
+.IP \(bu 2
+\fBgeom.width\fR, \fBgeom.height\fR - Window size
+.RE
+.PP
+.B Operators:
+.RS
+.IP \(bu 2
+\fB=\fR, \fB<>\fR - Equality and inequality
+.IP \(bu 2
+\fB>\fR, \fB<\fR, \fB>=\fR, \fB<=\fR - Comparison operators
+.RE
+.PP
+.B Logical operators:
+.RS
+.IP \(bu 2
+\fBall(\fR...\fB)\fR - All conditions must be true
+.IP \(bu 2
+\fBany(\fR...\fB)\fR - Any condition must be true
+.IP \(bu 2
+\fBnot(\fR...\fB)\fR - Negation
+.RE
+.PP
+.B Actions:
+.RS
+.IP \(bu 2
+\fB:filter\fR - Filter out matching windows
+.IP \(bu 2
+\fB:pin\fR - Pin matching windows
+.RE
+.SH EXAMPLES
+.PP
+Show all windows:
+.RS
+.B wminspect
+.RE
+.PP
+Show only mapped windows with colors:
+.RS
+.B wminspect \-\-only\-mapped \-\-colored
+.RE
+.PP
+Monitor window events with diffs:
+.RS
+.B wminspect \-\-monitor \-\-diff
+.RE
+.PP
+Filter windows by name:
+.RS
+.B wminspect \-f "name = firefox"
+.RE
+.PP
+Show large windows only:
+.RS
+.B wminspect \-f "all(geom.width > 800, geom.height > 600)"
+.RE
+.PP
+Pin windows matching a pattern:
+.RS
+.B wminspect \-f "name = *terminal*: pin"
+.RE
+.PP
+Load filter rules from a sheet:
+.RS
+.B wminspect sheet \-\-load rules.json
+.RE
+.PP
+Compile rules file:
+.RS
+.B wminspect sheet \-\-compile rules.rule rules.bin
+.RE
+.SH FILES
+.TP
+\fB~/.config/wminspect/\fR
+User configuration directory
+.TP
+\fB*.rule\fR
+Human-readable rule files
+.TP
+\fB*.json\fR
+JSON-formatted rule files
+.TP
+\fB*.bin\fR
+Binary-formatted rule files
+.SH ENVIRONMENT
+.TP
+\fBDISPLAY\fR
+X11 display to connect to
+.TP
+\fBXDG_SESSION_TYPE\fR
+Session type detection (used for Wayland detection)
+.SH PLATFORM SUPPORT
+.TP
+\fBLinux\fR
+Native X11 support, requires X11 development libraries
+.TP
+\fBmacOS\fR
+Requires XQuartz for X11 support
+.TP
+\fBWindows\fR
+Requires X11 server (WSL, VcXsrv, etc.)
+.TP
+\fBWayland\fR
+Not supported - tool will exit gracefully with helpful message
+.SH EXIT STATUS
+.TP
+\fB0\fR
+Success
+.TP
+\fB1\fR
+General error or missing X11 support
+.TP
+\fB2\fR
+Invalid command line arguments
+.SH BUGS
+Report bugs at: https://github.com/your-org/wminspect/issues
+.SH AUTHOR
+Window Manager Inspector Team
+.SH SEE ALSO
+.BR xwininfo (1),
+.BR xprop (1),
+.BR wmctrl (1),
+.BR xdotool (1)
