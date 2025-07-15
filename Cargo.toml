@@ -1,23 +1,60 @@
 [package]
 name = "wminspect"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Sian Cao <yinshuiboy@gmail.com>"]
 links = "xcb"
 build = "build.rs"
+edition = "2024"
+description = "A window manager inspection tool for X11"
+license = "MIT"
+repository = "https://github.com/sianscao/wminspect"
+documentation = "https://docs.rs/wminspect"
+readme = "README.md"
+keywords = ["x11", "window-manager", "inspection", "desktop", "linux"]
+categories = ["gui", "development-tools", "command-line-utilities"]
 
 [dependencies]
 libc = "*"
-xcb = {version = "0.9", features = ["thread"]}
-xcb-util = {version = "0.3", features = ["ewmh", "keysyms", "icccm", "thread"]}
+xcb = { version = "0.10", optional = true }
+xcb-util = { version = "0.4", features = ["ewmh", "keysyms", "icccm"], optional = true }
 colored = "1.4"
-timer = "*"
-crossbeam = "*"
+crossbeam-channel = "0.5"
+crossbeam = "0.8"
 regex = "*"
 lazy_static = "*"
 
-serde = "1.0"
-erased-serde = "0.3"
-serde_derive = "*"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "*"
-bincode = "*"
-clap = "2.27.*"
+bincode = "1.3"
+clap = "4"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+tokio = { version = "1.0", features = ["full"] }
+globset = "0.4"
+owo-colors = "4.0"
+flamegraph = "0.6"
+once_cell = "1.19"
+term_size = "0.3"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.0"
+x11rb = { version = "0.12", features = ["all-extensions"] }
+tempfile = "3.0"
+pretty_assertions = "1.4"
+criterion = "0.5"
+grcov = "0.8"
+
+[features]
+default = ["x11", "gui"]
+x11 = ["xcb", "xcb-util"]
+gui = []
+platform-linux = []
+platform-windows = []
+platform-macos = []
+
+[[bench]]
+name = "filter_bench"
+harness = false

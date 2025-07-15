@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  wminspect:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    environment:
+      - DISPLAY=${DISPLAY}
+    network_mode: host
+    stdin_open: true
+    tty: true
+    depends_on:
+      - x11-server
+    
+  x11-server:
+    image: jlesage/x11vnc:latest
+    ports:
+      - "5900:5900"
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    environment:
+      - DISPLAY=${DISPLAY}
+    privileged: true
