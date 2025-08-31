@@ -1,20 +1,20 @@
+extern crate bincode as bc;
 extern crate serde;
 extern crate serde_json;
-extern crate bincode as bc;
 
 use crate::core::types::*;
 use crate::core::wildcard::OptimizedWildcardMatcher;
-use crate::{wm_trace, wm_error};
+use crate::{wm_error, wm_trace};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::convert::AsRef;
-use serde::{Serialize, Deserialize};
 
 type FilterFunction = Box<dyn Fn(&Window) -> bool + Send>;
 
 pub struct ActionFuncPair {
     pub action: Action,
     pub(crate) rule: FilterRule,
-    pub func: FilterFunction
+    pub func: FilterFunction,
 }
 
 impl std::fmt::Debug for ActionFuncPair {
@@ -29,27 +29,30 @@ impl std::fmt::Debug for ActionFuncPair {
 
 #[derive(Debug)]
 pub struct Filter {
-    pub rules: Vec<ActionFuncPair>
+    pub rules: Vec<ActionFuncPair>,
 }
 
 unsafe impl Sync for Filter {}
 
 impl Filter {
-
     /// constructors
     pub fn new() -> Filter {
-        Filter { rules: Vec::new(), }
+        Filter { rules: Vec::new() }
     }
 
     pub fn parse<S: AsRef<str>>(rule: S) -> Filter {
-        let mut filter = Filter { rules: Vec::new(), };
+        let mut filter = Filter { rules: Vec::new() };
 
         let mut tokens = scan_tokens(rule);
         if let Some(top) = parse_rule(&mut tokens) {
             for item in top.into_iter() {
                 wm_trace!("item: {:?}", item);
                 let f = item.rule.gen_closure();
-                filter.rules.push(ActionFuncPair { action: item.action, rule: item.rule, func: f});
+                filter.rules.push(ActionFuncPair {
+                    action: item.action,
+                    rule: item.rule,
+                    func: f,
+                });
             }
         }
 
@@ -57,7 +60,11 @@ impl Filter {
     }
 
     pub fn apply_to(&self, w: &Window) -> bool {
-        !self.rules.iter().filter(|r| r.action == Action::FilterOut).any(|r| !(r.func)(w))
+        !self
+            .rules
+            .iter()
+            .filter(|r| r.action == Action::FilterOut)
+            .any(|r| !(r.func)(w))
     }
 
     pub fn add_live_rule(&mut self, item: ActionFuncPair) {
@@ -81,15 +88,20 @@ impl Filter {
 
     /// Get pinned window count from rules
     pub fn pinned_rule_count(&self) -> usize {
-        self.rules.iter().filter(|r| r.action == Action::Pin).count()
+        self.rules
+            .iter()
+            .filter(|r| r.action == Action::Pin)
+            .count()
     }
 
     /// Get filter rule count
     pub fn filter_rule_count(&self) -> usize {
-        self.rules.iter().filter(|r| r.action == Action::FilterOut).count()
+        self.rules
+            .iter()
+            .filter(|r| r.action == Action::FilterOut)
+            .count()
     }
 }
-
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Action {
@@ -127,10 +139,14 @@ pub enum Op {
 pub enum FilterRule {
     Adhoc,
     ClientsOnly,
-    Single { pred: Predicate, op: Op, matcher: Matcher },
-    All (Vec<Box<FilterRule>>),
-    Any (Vec<Box<FilterRule>>),
-    Not (Box<FilterRule>)
+    Single {
+        pred: Predicate,
+        op: Op,
+        matcher: Matcher,
+    },
+    All(Vec<Box<FilterRule>>),
+    Any(Vec<Box<FilterRule>>),
+    Not(Box<FilterRule>),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -149,18 +165,23 @@ pub fn wild_match(pat: &str, s: &str) -> bool {
         let mut k = 0;
         while j < s.len() {
             if pat.get(i).unwrap_or(&'\0') == &'?' || pat.get(i).unwrap_or(&'\0') == &s[j] {
-                i += 1; j += 1; 
+                i += 1;
+                j += 1;
             } else if pat.get(i).unwrap_or(&'\0') == &'*' {
-                star = i; k = j; i += 1; 
+                star = i;
+                k = j;
+                i += 1;
             } else if pat.get(star).is_some() {
-                k += 1; j = k; i = star + 1;
+                k += 1;
+                j = k;
+                i = star + 1;
             } else {
                 return false;
-            } 
+            }
         }
 
         while pat.get(i).unwrap_or(&'\0') == &'*' {
-            i += 1; 
+            i += 1;
         }
         i == pat.len()
     }
@@ -168,7 +189,7 @@ pub fn wild_match(pat: &str, s: &str) -> bool {
     #[allow(dead_code)]
     fn mat_star(pat: &[char], i: usize, s: &[char], mut j: usize) -> bool {
         while j <= s.len() {
-            if mat(pat, i+1, s, j) {
+            if mat(pat, i + 1, s, j) {
                 return true;
             }
             j += 1;
@@ -184,9 +205,9 @@ pub fn wild_match(pat: &str, s: &str) -> bool {
         }
 
         if pat[i] == '?' || pat[i] == s[j] {
-            mat(pat, i+1, s, j+1)
+            mat(pat, i + 1, s, j + 1)
         } else if pat[i] == '*' {
-            mat_star(pat, i, s, j) 
+            mat_star(pat, i, s, j)
         } else {
             return false;
         }
@@ -195,7 +216,10 @@ pub fn wild_match(pat: &str, s: &str) -> bool {
     let res;
     if is_wild_string(pat) {
         //res = mat(&pat.chars().collect::<Vec<_>>(), 0, &s.chars().collect::<Vec<_>>(), 0);
-        res = mat2(&pat.chars().collect::<Vec<_>>(), &s.chars().collect::<Vec<_>>());
+        res = mat2(
+            &pat.chars().collect::<Vec<_>>(),
+            &s.chars().collect::<Vec<_>>(),
+        );
     } else {
         res = s.contains(pat);
     }
@@ -214,10 +238,10 @@ fn parse_id(id_str: &str) -> u32 {
     } else {
         id_str.parse::<u32>().unwrap_or(0)
     }
-} 
+}
 
 macro_rules! _match_geometry {
-    ($elem:tt, $op:tt, $i:tt) => (
+    ($elem:tt, $op:tt, $i:tt) => {
         match *$op {
             Op::Eq => Box::new(move |ref w| w.geom.$elem == $i),
             Op::Neq => Box::new(move |ref w| w.geom.$elem != $i),
@@ -225,25 +249,30 @@ macro_rules! _match_geometry {
             Op::LT => Box::new(move |ref w| w.geom.$elem < $i),
             Op::GE => Box::new(move |ref w| w.geom.$elem >= $i),
             Op::LE => Box::new(move |ref w| w.geom.$elem <= $i),
-        })
+        }
+    };
 }
 
 impl FilterRule {
     pub(crate) fn gen_closure(&self) -> FilterFunction {
         use self::FilterRule::*;
         match self {
-            &Adhoc => {Box::new(|_w| true)},
+            &Adhoc => Box::new(|_w| true),
             &ClientsOnly => FilterRule::clients_only_gen_closure(),
-            &Single {ref pred, ref op, ref matcher} => FilterRule::single_gen_closure(pred, op, matcher),
-            &All (ref rules) => FilterRule::all_gen_closure(rules),
-            &Any (ref rules) => FilterRule::any_gen_closure(rules),
-            &Not (ref rule) => FilterRule::not_gen_closure(rule),
+            &Single {
+                ref pred,
+                ref op,
+                ref matcher,
+            } => FilterRule::single_gen_closure(pred, op, matcher),
+            &All(ref rules) => FilterRule::all_gen_closure(rules),
+            &Any(ref rules) => FilterRule::any_gen_closure(rules),
+            &Not(ref rule) => FilterRule::not_gen_closure(rule),
         }
     }
 
     /// TODO: clients info can only be retreived from wm context
     fn clients_only_gen_closure() -> FilterFunction {
-        Box::new(|_w|{true})
+        Box::new(|w| !w.attrs.override_redirect && w.attrs.map_state != MapState::Unmapped)
     }
 
     fn any_gen_closure(rules: &Vec<BoxedRule>) -> FilterFunction {
@@ -290,58 +319,66 @@ impl FilterRule {
             (&Predicate::Name, op, &Matcher::Wildcard(ref pat)) => {
                 let pat = pat.clone();
                 match *op {
-                    Op::Eq => Box::new(move |ref w| OptimizedWildcardMatcher::match_pattern(&pat, &w.name)),
-                    Op::Neq => Box::new(move |ref w| !OptimizedWildcardMatcher::match_pattern(&pat, &w.name)),
-                    _ => {panic!("name can only use Eq|Neq as op")}
+                    Op::Eq => Box::new(move |ref w| {
+                        OptimizedWildcardMatcher::match_pattern(&pat, &w.name)
+                    }),
+                    Op::Neq => Box::new(move |ref w| {
+                        !OptimizedWildcardMatcher::match_pattern(&pat, &w.name)
+                    }),
+                    _ => {
+                        panic!("name can only use Eq|Neq as op")
+                    }
                 }
-                
-            },
+            }
             (&Predicate::Id, &Op::Eq, &Matcher::Wildcard(ref id)) => {
                 let id = id.clone();
                 if is_wild_string(&id) {
-                    Box::new(move |ref w| OptimizedWildcardMatcher::match_pattern(&id, &format!("0x{:x}", w.id)))
+                    Box::new(move |ref w| {
+                        OptimizedWildcardMatcher::match_pattern(&id, &format!("0x{:x}", w.id))
+                    })
                 } else {
                     let i = parse_id(&id);
                     Box::new(move |ref w| w.id == i)
                 }
-            },
-            (&Predicate::Attr(ref attr), op, &Matcher::MapStateValue(ref st)) if attr == "map_state" => {
+            }
+            (&Predicate::Attr(ref attr), op, &Matcher::MapStateValue(ref st))
+                if attr == "map_state" =>
+            {
                 let state = *st;
                 match *op {
                     Op::Eq => Box::new(move |ref w| w.attrs.map_state == state),
                     Op::Neq => Box::new(move |ref w| w.attrs.map_state != state),
-                    _ => {panic!("map_state can only use Eq|Neq as op")}
+                    _ => {
+                        panic!("map_state can only use Eq|Neq as op")
+                    }
                 }
-                
-            },
-            (&Predicate::Attr(ref attr), op, &Matcher::BoolValue(ref b)) if attr == "override_redirect" => {
+            }
+            (&Predicate::Attr(ref attr), op, &Matcher::BoolValue(ref b))
+                if attr == "override_redirect" =>
+            {
                 let or = *b;
                 match *op {
                     Op::Eq => Box::new(move |ref w| w.attrs.override_redirect == or),
                     Op::Neq => Box::new(move |ref w| w.attrs.override_redirect != or),
-                    _ => {panic!("override_redirect can only use Eq|Neq as op")}
+                    _ => {
+                        panic!("override_redirect can only use Eq|Neq as op")
+                    }
                 }
-                
-            },
-            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(i)) => {
-                match g.as_str() {
-                    "x" => _match_geometry!(x, op, i),
-                    "y" => _match_geometry!(y, op, i),
-                    "width" => _match_geometry!(width, op, (i as u16)),
-                    "height" => _match_geometry!(height, op, (i as u16)),
-                    wrong @ _ => panic!("wrong geometry attribute {}", wrong)
-                }
+            }
+            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(i)) => match g.as_str() {
+                "x" => _match_geometry!(x, op, i),
+                "y" => _match_geometry!(y, op, i),
+                "width" => _match_geometry!(width, op, (i as u16)),
+                "height" => _match_geometry!(height, op, (i as u16)),
+                wrong @ _ => panic!("wrong geometry attribute {}", wrong),
             },
 
             _ => {
-                panic!("not implement"); 
+                panic!("not implement");
             }
         }
     }
 }
-
-
-
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Token {
@@ -384,7 +421,7 @@ fn parse_item(tokens: &mut Tokens) -> Option<FilterItem> {
 
     let mut action = Action::FilterOut;
 
-    if tokens[0] == EOT { 
+    if tokens[0] == EOT {
         return None;
     }
 
@@ -394,28 +431,29 @@ fn parse_item(tokens: &mut Tokens) -> Option<FilterItem> {
                 tokens.pop_front();
                 match tokens.pop_front().unwrap() {
                     ACTION(act) => action = act,
-                    _ => {wm_error!("ignore wrong action"); }
+                    _ => {
+                        wm_error!("ignore wrong action");
+                    }
                 }
             }
 
-            Some(FilterItem {action: action, rule: cond })
-        }, 
-        _ => {
-            return None
+            Some(FilterItem {
+                action: action,
+                rule: cond,
+            })
         }
+        _ => return None,
     }
 }
 
 macro_rules! match_tok {
-    ($tokens:tt, $kd:expr) => (
-        {
-            if $tokens[0] == $kd {
-                $tokens.pop_front().unwrap();
-            } else {
-                panic!("expecting {:?} but {:?}", $kd, $tokens[0]);
-            }
+    ($tokens:tt, $kd:expr) => {{
+        if $tokens[0] == $kd {
+            $tokens.pop_front().unwrap();
+        } else {
+            panic!("expecting {:?} but {:?}", $kd, $tokens[0]);
         }
-    )
+    }};
 }
 
 fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
@@ -427,7 +465,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
             let mut pred = Predicate::Id;
 
             match s.as_str() {
-                "attrs" => { 
+                "attrs" => {
                     match_tok!(tokens, DOT);
                     let tk = tokens.pop_front().unwrap();
                     if let StrLit(name) = tk {
@@ -436,7 +474,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                     } else {
                         wm_error!("wrong token: {:?}", tk);
                     }
-                },
+                }
                 "geom" => {
                     match_tok!(tokens, DOT);
                     let tk = tokens.pop_front().unwrap();
@@ -446,17 +484,23 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                     } else {
                         wm_error!("wrong token: {:?}", tk);
                     }
-                },
+                }
 
                 "id" | "name" => {
-                    pred = if s == "id" { Predicate::Id } else { Predicate::Name };
-                },
+                    pred = if s == "id" {
+                        Predicate::Id
+                    } else {
+                        Predicate::Name
+                    };
+                }
 
                 "clients" => {
                     return Some(FilterRule::ClientsOnly);
-                },
+                }
 
-                _ => { wm_error!("wrong token: {:?}", s); }
+                _ => {
+                    wm_error!("wrong token: {:?}", s);
+                }
             }
 
             assert!(tokens.len() >= 2);
@@ -468,35 +512,35 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                         Predicate::Attr(ref a) if a == "override_redirect" => {
                             Matcher::BoolValue(match s.to_lowercase().as_str() {
                                 "0" | "false" => false,
-                                _ => true
+                                _ => true,
                             })
-                        },
+                        }
                         Predicate::Attr(ref a) if a == "map_state" => {
                             Matcher::MapStateValue(match s.to_lowercase().as_str() {
                                 "viewable" => MapState::Viewable,
                                 "unmapped" => MapState::Unmapped,
                                 "unviewable" => MapState::Unviewable,
-                                _ => panic!("bad map state value")
+                                _ => panic!("bad map state value"),
                             })
-                        },
+                        }
                         Predicate::Attr(_) => panic!("bad attr name"),
-                        Predicate::Geom(_) => Matcher::IntegralValue(s.parse::<i16>().unwrap_or(0))
+                        Predicate::Geom(_) => Matcher::IntegralValue(s.parse::<i16>().unwrap_or(0)),
                     };
 
                     Some(FilterRule::Single {
                         pred: pred,
                         op: op.clone(),
-                        matcher: matcher
+                        matcher: matcher,
                     })
-                }, 
+                }
 
                 _ => {
                     wm_error!("wrong rule");
                     None
-                } 
+                }
             }
-        },
-        
+        }
+
         ANY | ALL => {
             match_tok!(tokens, LBRACE);
             let mut rules = Vec::new();
@@ -505,7 +549,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                 // pop ',' or ')' anyway
                 let tk = tokens.pop_front().unwrap();
                 if tk == RBRACE {
-                    break
+                    break;
                 }
             }
 
@@ -514,33 +558,43 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
             } else {
                 Some(FilterRule::All(rules))
             }
-        },
+        }
 
         NOT => {
             match_tok!(tokens, LBRACE);
             if let Some(cond) = parse_cond(tokens) {
-                match_tok!(tokens, RBRACE);
-                Some(FilterRule::Not(Box::new(cond))) //FIXME: assert only one rule included 
+                if let Some(RBRACE) = tokens.pop_front() {
+                    Some(FilterRule::Not(Box::new(cond)))
+                } else {
+                    wm_error!("not rule accepts only one condition");
+                    None
+                }
             } else {
                 None
             }
-        },
-        _ => { wm_error!("wrong match: [{:?}]", tk); None }
+        }
+        _ => {
+            wm_error!("wrong match: [{:?}]", tk);
+            None
+        }
     }
 }
 
 pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
     use self::Token::*;
     macro_rules! append_tok {
-        ($tokens:tt, $tk:expr) => ({
-            $tokens.push_back($tk); 
+        ($tokens:tt, $tk:expr) => {{
+            $tokens.push_back($tk);
             //println!("collect [{:?}]", $tk);
-        })
+        }};
     }
 
     let mut tokens = Tokens::new();
     let mut chars = rule.as_ref().chars().peekable();
-    let metas: HashSet<_> = ['.', ',', ';', ':', '(', ')', '<', '>', '='].iter().cloned().collect();
+    let metas: HashSet<_> = ['.', ',', ';', ':', '(', ')', '<', '>', '=']
+        .iter()
+        .cloned()
+        .collect();
     let mut need_act = false;
 
     loop {
@@ -552,8 +606,8 @@ pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
         match ch {
             '=' => {
                 append_tok!(tokens, OP(Op::Eq));
-            },
-            
+            }
+
             '>' => {
                 let mut do_consume = false;
                 if let Some(nt) = chars.peek() {
@@ -565,8 +619,10 @@ pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
                     }
                 }
 
-                if do_consume { chars.next(); }
-            },
+                if do_consume {
+                    chars.next();
+                }
+            }
 
             '<' => {
                 let mut do_consume = false;
@@ -581,44 +637,55 @@ pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
                         append_tok!(tokens, OP(Op::LT));
                     }
                 }
-                if do_consume { chars.next(); }
-            },
+                if do_consume {
+                    chars.next();
+                }
+            }
 
-            '.' => { append_tok!(tokens, DOT); },
-            ',' => { append_tok!(tokens, COMMA); },
-            ';' => { 
-                append_tok!(tokens, SEMICOLON); 
+            '.' => {
+                append_tok!(tokens, DOT);
+            }
+            ',' => {
+                append_tok!(tokens, COMMA);
+            }
+            ';' => {
+                append_tok!(tokens, SEMICOLON);
                 need_act = false;
-            },
-            ':' => { 
+            }
+            ':' => {
                 append_tok!(tokens, COLON);
                 need_act = true;
-            },
-            '(' => { append_tok!(tokens, LBRACE); },
-            ')' => { append_tok!(tokens, RBRACE); },
+            }
+            '(' => {
+                append_tok!(tokens, LBRACE);
+            }
+            ')' => {
+                append_tok!(tokens, RBRACE);
+            }
 
-            _ if ch.is_whitespace() => {},
+            _ if ch.is_whitespace() => {}
 
             _ => {
                 // scan string literal
                 let compound_str = match ch {
                     '\'' | '"' => true,
-                    _ => false
+                    _ => false,
                 };
 
                 let mut s = String::new();
-                if !compound_str { s.push(ch); }
+                if !compound_str {
+                    s.push(ch);
+                }
                 loop {
                     if compound_str {
                         match chars.peek() {
-                            Some(&val) if val != '\'' && val != '"' => {},
+                            Some(&val) if val != '\'' && val != '"' => {}
                             _ => break,
                         }
-
                     } else {
                         match chars.peek() {
                             //skip special char
-                            Some(val) if !metas.contains(val) => {},
+                            Some(val) if !metas.contains(val) => {}
                             _ => break,
                         }
                     }
@@ -639,17 +706,17 @@ pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
                     "not" => append_tok!(tokens, NOT),
                     "pin" if need_act => append_tok!(tokens, ACTION(Action::Pin)),
                     "filter" if need_act => append_tok!(tokens, ACTION(Action::FilterOut)),
-                    lowered @ _ => append_tok!(tokens, StrLit(lowered.to_string()))
+                    lowered @ _ => append_tok!(tokens, StrLit(lowered.to_string())),
                 }
             }
-        } 
+        }
     }
 
     append_tok!(tokens, EOT);
     tokens
 }
 
-pub fn filter_grammar() ->&'static str {
+pub fn filter_grammar() -> &'static str {
     return "grammar:
     top -> ( item ( ';' item )* )?
     item -> cond ( ':' action)? 
@@ -703,7 +770,7 @@ mod more_tests {
     fn test_serde_round_trip() {
         let item = FilterItem {
             action: Action::Pin,
-            rule: FilterRule::ClientsOnly
+            rule: FilterRule::ClientsOnly,
         };
         let serialized = serde_json::to_string(&item).unwrap();
         let deserialized: FilterItem = serde_json::from_str(&serialized).unwrap();
@@ -712,15 +779,15 @@ mod more_tests {
 }
 mod tests {
     #[allow(unused_imports)]
-    use super::*;
-    #[allow(unused_imports)]
     use super::Token::*;
+    #[allow(unused_imports)]
+    use super::*;
 
     #[allow(unused_macros)]
     macro_rules! append_tok {
         ($tokens:expr, $tk:expr) => {
             $tokens.push_back($tk);
-        }
+        };
     }
 
     #[test]
@@ -831,7 +898,8 @@ mod tests {
 
     #[test]
     fn test_scan_tokens3() {
-        let tokens = scan_tokens("any(name =dde?osd, all(geom.x > 2, geom.width < 500));".to_string());
+        let tokens =
+            scan_tokens("any(name =dde?osd, all(geom.x > 2, geom.width < 500));".to_string());
         println!("{:?}", tokens);
         assert_eq!(tokens.len(), 23);
     }
@@ -846,14 +914,16 @@ mod tests {
     #[test]
     fn test_scan_tokens5() {
         // compound string literal
-        let tokens = scan_tokens("any(name = 'inside, this', name = \"name ; any\"): pin".to_string());
+        let tokens =
+            scan_tokens("any(name = 'inside, this', name = \"name ; any\"): pin".to_string());
         println!("{:?}", tokens);
         assert_eq!(tokens.len(), 13);
     }
 
     #[test]
     fn test_parse_flow() {
-        let mut tokens = scan_tokens("any(name =dde?osd*, all(geom.x > 2, geom.width < 500));".to_string());
+        let mut tokens =
+            scan_tokens("any(name =dde?osd*, all(geom.x > 2, geom.width < 500));".to_string());
         println!("tokens: {:?}", tokens);
         assert_eq!(tokens.len(), 23);
 
@@ -890,7 +960,10 @@ mod tests {
         assert_eq!(wild_match("??*-*-??", "deepin-wm-switcher"), false);
         assert_eq!(wild_match("??*-wm-*", "deepin-wm-switcher"), true);
 
-        assert_eq!(wild_match("*dde*", "ClutterActor: Clutter Reference Manual"), false);
+        assert_eq!(
+            wild_match("*dde*", "ClutterActor: Clutter Reference Manual"),
+            false
+        );
     }
 
     #[test]
@@ -903,14 +976,13 @@ mod tests {
 
     #[test]
     fn test_store1() {
-        let act = Action::FilterOut; 
+        let act = Action::FilterOut;
         let serialized = serde_json::to_string(&act).unwrap();
         println!("serialized = {}", serialized);
         let act2 = serde_json::from_str::<Action>(&serialized).unwrap();
         assert_eq!(act, act2);
 
-
-        let act = Action::Pin; 
+        let act = Action::Pin;
         let serialized = serde_json::to_string(&act).unwrap();
         println!("serialized = {}", serialized);
         let act2 = serde_json::from_str::<Action>(&serialized).unwrap();
@@ -957,5 +1029,4 @@ mod tests {
             assert_eq!(top, act2);
         }
     }
-
 }

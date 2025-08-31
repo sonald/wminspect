@@ -1,4 +1,4 @@
-use wminspect::dsl::filter::{parse_rule, scan_tokens, FilterItem};
+use wminspect::dsl::filter::{FilterItem, parse_rule, scan_tokens};
 
 #[test]
 fn test_parser_basic() {
@@ -24,10 +24,10 @@ fn test_parser_complex() {
 fn test_parser_ast_equality() {
     let mut tokens1 = scan_tokens("name = example");
     let mut tokens2 = scan_tokens("name = example");
-    
+
     let parsed1 = parse_rule(&mut tokens1).unwrap();
     let parsed2 = parse_rule(&mut tokens2).unwrap();
-    
+
     assert_eq!(parsed1, parsed2);
 }
 
@@ -53,7 +53,7 @@ fn test_parser_nested_rules() {
     let mut tokens = scan_tokens("any(name = test, all(id = 123, geom.width > 400))");
     let parsed = parse_rule(&mut tokens).unwrap();
     assert_eq!(parsed.len(), 1);
-    
+
     match &parsed[0].rule {
         wminspect::dsl::filter::FilterRule::Any(rules) => {
             assert_eq!(rules.len(), 2);
@@ -67,11 +67,18 @@ fn test_parser_not_rule() {
     let mut tokens = scan_tokens("not(name = test)");
     let parsed = parse_rule(&mut tokens).unwrap();
     assert_eq!(parsed.len(), 1);
-    
+
     match &parsed[0].rule {
         wminspect::dsl::filter::FilterRule::Not(_) => {
             // Success
         }
         _ => panic!("Expected Not rule"),
+    }
+
+    #[test]
+    fn test_parser_not_rule_multiple_conditions() {
+        let mut tokens = scan_tokens("not(name = test, id = 1)");
+        let parsed = parse_rule(&mut tokens);
+        assert!(parsed.is_none());
     }
 }
