@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo search:*)",
+      "Bash(cargo:*)",
+      "Bash(brew list:*)",
+      "Bash(brew install:*)",
+      "Bash(pkg-config:*)",
+      "Bash(echo $LIBRARY_PATH)",
+      "Bash(echo $PKG_CONFIG_PATH)",
+      "Bash(rustc:*)",
+      "Bash(git add:*)",
+      "Bash(git rm:*)",
+      "Bash(echo $DISPLAY)",
+      "Bash(./target/debug/wminspect:*)",
+      "Bash(xwininfo:*)",
+      "Bash(RUST_LOG=debug ./target/debug/wminspect)",
+      "Bash(timeout 5 ./target/debug/wminspect:*)"
+    ],
+    "deny": [],
+    "ask": [],
+    "additionalDirectories": [
+      "/opt/homebrew",
+      "/opt/X11"
+    ]
+  }
+}
