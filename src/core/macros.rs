@@ -1,3 +1,4 @@
+#[allow(unused_macros)]
 macro_rules! hashset {
     (@unit $e:expr) => (());
     (@count $($e:expr),*) => ( [$( hashset!(@unit $e) ),*].len() );
@@ -10,13 +11,8 @@ macro_rules! hashset {
     ( $( $e:expr, )+ ) => ( hashset!( $($e),+ ) );
 }
 
-#[cfg(feature = "core_intrinsics")]
 pub fn print_type_of<T>(_: &T) {
-    println!("{}", unsafe { std::intrinsics::type_name::<T>() });
-}
-
-#[cfg(not(feature = "core_intrinsics"))]
-pub fn print_type_of<T>(_: &T) {
+    println!("{}", std::any::type_name::<T>());
 }
 
 #[cfg(test)]

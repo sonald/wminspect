@@ -711,7 +711,9 @@ mod more_tests {
     }
 }
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
+    #[allow(unused_imports)]
     use super::Token::*;
 
     #[allow(unused_macros)]

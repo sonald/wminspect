@@ -12,6 +12,7 @@ static GLOB_CACHE: Lazy<Mutex<HashMap<String, CompiledGlob>>> = Lazy::new(|| {
 #[derive(Debug, Clone)]
 struct CompiledGlob {
     globset: GlobSet,
+    #[allow(dead_code)]
     original_pattern: String,
 }
 
