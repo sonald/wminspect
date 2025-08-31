@@ -14,35 +14,35 @@ keywords = ["x11", "window-manager", "inspection", "desktop", "linux"]
 categories = ["gui", "development-tools", "command-line-utilities"]
 
 [dependencies]
-libc = "*"
+libc = "0.2"
 xcb = { version = "0.10", optional = true }
 xcb-util = { version = "0.4", features = ["ewmh", "keysyms", "icccm"], optional = true }
-colored = "1.4"
+colored = "2.2"
 crossbeam-channel = "0.5"
 crossbeam = "0.8"
-regex = "*"
-lazy_static = "*"
+regex = "1.11"
+lazy_static = "1.5"
 
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "*"
+serde_json = "1.0"
 bincode = "1.3"
-clap = "4"
+clap = "4.5"
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 tokio = { version = "1.0", features = ["full"] }
 globset = "0.4"
-owo-colors = "4.0"
+owo-colors = "4.2"
 flamegraph = "0.6"
-once_cell = "1.19"
+once_cell = "1.21"
 term_size = "0.3"
 
 [dev-dependencies]
 assert_cmd = "2.0"
-predicates = "3.0"
-x11rb = { version = "0.12", features = ["all-extensions"] }
-tempfile = "3.0"
+predicates = "3.1"
+x11rb = { version = "0.13", features = ["all-extensions"] }
+tempfile = "3.14"
 pretty_assertions = "1.4"
 criterion = "0.5"
 grcov = "0.8"

@@ -1,0 +1,12 @@
+# Modern cargo configuration for wminspect macOS support  
+# Supports both Apple Silicon (ARM64) and Intel (x86_64) architectures
+
+# Apple Silicon (ARM64) configuration
+[target.aarch64-apple-darwin.xcb]
+rustc-link-search = ["/opt/homebrew/lib", "/opt/X11/lib"]
+rustc-link-lib = ["xcb", "xcb-icccm", "xcb-ewmh", "xcb-keysyms"]
+
+# Intel Mac (x86_64) configuration - keep original working config
+[target.x86_64-apple-darwin.xcb]
+rustc-link-search = ["/opt/X11/lib", "/usr/local/lib"]
+rustc-link-lib = ["xcb", "xcb-icccm", "xcb-ewmh", "xcb-keysyms"]
