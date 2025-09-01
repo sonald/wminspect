@@ -60,6 +60,7 @@ pub struct Context<'a> {
     pub c: &'a ewmh::Connection,
     pub root: u32,
     state: StateRef,
+    formatter: crate::core::colorized_output::ColorizedFormatter,
 }
 
 #[cfg(feature = "x11")]
@@ -72,6 +73,19 @@ impl<'a> Context<'a> {
             c,
             root: screen.root(),
             state,
+            formatter: crate::core::colorized_output::ColorizedFormatter::new(),
+        }
+    }
+
+    pub fn new_with_formatter(c: &'a ewmh::Connection, f: Filter, formatter: crate::core::colorized_output::ColorizedFormatter) -> Context<'a> {
+        let screen = c.get_setup().roots().next().unwrap();
+        let state = create_state_ref(f);
+
+        Context {
+            c,
+            root: screen.root(),
+            state,
+            formatter,
         }
     }
 
@@ -99,6 +113,14 @@ impl<'a> Context<'a> {
         self.state.add_option(Condition::ClientsOnly);
     }
 
+    pub fn set_no_override_redirect(&mut self) {
+        self.state.add_option(Condition::NoOverrideRedirect);
+    }
+
+    pub fn set_show_sequence_numbers(&mut self) {
+        self.state.add_option(Condition::ShowSequenceNumbers);
+    }
+
     /// Check if a window should be included based on command-line conditions
     fn check_window_conditions(&self, window: &CoreWindow, attrs: &Attributes) -> bool {
         // Check MappedOnly condition - only show mapped windows
@@ -121,6 +143,12 @@ impl<'a> Context<'a> {
         
         // Check ClientsOnly condition - only include client-managed windows
         if self.state.has_option(&Condition::ClientsOnly) && 
+           attrs.override_redirect {
+            return false;
+        }
+        
+        // Check NoOverrideRedirect condition - ignore override-redirect windows
+        if self.state.has_option(&Condition::NoOverrideRedirect) && 
            attrs.override_redirect {
             return false;
         }
@@ -228,16 +256,16 @@ impl<'a> Context<'a> {
 
     pub fn dump_windows(&self, changes: Option<WindowListView>) {
         let layout = self.state.read_layout();
-        let colored = self.state.has_option(&Condition::Colorful);
         let show_diff = self.state.has_option(&Condition::ShowDiff);
 
         for (i, wid) in layout.filtered_view.iter().enumerate() {
             if let Some(w) = layout.windows.get(wid) {
-                if show_diff && changes.is_some() && changes.as_ref().unwrap().contains(wid) {
-                    println!("{}: {}", i, win2str(w, colored).on_white());
-                } else {
-                    println!("{}: {}", i, win2str(w, colored));
-                }
+                let geom_str = format!("{}", w.geom);
+                let attrs_str = format!("{}", w.attrs);
+                let is_diff = show_diff && changes.is_some() && changes.as_ref().unwrap().contains(wid);
+                
+                let formatted_output = self.formatter.format_window_entry(i, w.id, &w.name, &geom_str, &attrs_str, is_diff);
+                println!("{}", formatted_output);
             }
         }
     }
@@ -246,12 +274,25 @@ impl<'a> Context<'a> {
 #[cfg(feature = "x11")]
 pub fn monitor(ctx: &Context) {
     wm_info!("Starting monitor mode...");
+    let show_sequence = ctx.state.has_option(&Condition::ShowSequenceNumbers);
+    let mut event_count = 0u32;
 
+    // Initial window state
+    if show_sequence {
+        println!("Event #{}: Initial window state", event_count);
+    }
     ctx.refresh_windows();
     ctx.dump_windows(None);
 
+    // Monitor for events
     while let Some(_event) = ctx.c.poll_for_event() {
+        event_count += 1;
         wm_trace!("event received");
+        
+        if show_sequence {
+            println!("Event #{}: Window change detected", event_count);
+        }
+        
         ctx.refresh_windows();
         ctx.dump_windows(None);
     }
@@ -312,6 +353,12 @@ mod tests {
             
             // Check ClientsOnly condition - only include client-managed windows
             if self.has_option(&Condition::ClientsOnly) && 
+               attrs.override_redirect {
+                return false;
+            }
+            
+            // Check NoOverrideRedirect condition - exclude override-redirect windows (popups, tooltips)
+            if self.has_option(&Condition::NoOverrideRedirect) && 
                attrs.override_redirect {
                 return false;
             }
@@ -489,5 +536,39 @@ mod tests {
         // Test mapped override-redirect window - should be excluded (fails ClientsOnly)
         let (popup_window, popup_attrs) = create_test_window("popup", MapState::Viewable, true, 200, 100);
         assert!(!ctx.check_window_conditions(&popup_window, &popup_attrs));
+    }
+
+    #[test]
+    fn test_no_override_redirect_condition() {
+        let ctx = TestContext::new();
+        ctx.add_condition(Condition::NoOverrideRedirect);
+
+        // Test normal client window (not override-redirect) - should be included
+        let (client_window, client_attrs) = create_test_window("firefox", MapState::Viewable, false, 800, 600);
+        assert!(ctx.check_window_conditions(&client_window, &client_attrs));
+
+        // Test override-redirect window (popup) - should be excluded
+        let (popup_window, popup_attrs) = create_test_window("popup", MapState::Viewable, true, 200, 100);
+        assert!(!ctx.check_window_conditions(&popup_window, &popup_attrs));
+
+        // Test tooltip (override-redirect) - should be excluded
+        let (tooltip_window, tooltip_attrs) = create_test_window("tooltip", MapState::Viewable, true, 150, 30);
+        assert!(!ctx.check_window_conditions(&tooltip_window, &tooltip_attrs));
+    }
+
+    #[test]
+    fn test_show_sequence_numbers_condition() {
+        let ctx = TestContext::new();
+        
+        // Test that the condition can be added without errors
+        ctx.add_condition(Condition::ShowSequenceNumbers);
+        
+        // ShowSequenceNumbers doesn't affect window filtering, so any window should pass
+        let (window, attrs) = create_test_window("test", MapState::Viewable, false, 400, 300);
+        assert!(ctx.check_window_conditions(&window, &attrs));
+        
+        // Verify the condition is stored
+        let options = ctx.state.read_options();
+        assert!(options.contains(&Condition::ShowSequenceNumbers));
     }
 }
