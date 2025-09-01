@@ -365,12 +365,12 @@ impl FilterRule {
                     }
                 }
             }
-            (&Predicate::Geom(ref g), op, &Matcher::IntegralValue(i)) => match g.as_str() {
+            (Predicate::Geom(g), op, &Matcher::IntegralValue(i)) => match g.as_str() {
                 "x" => _match_geometry!(x, op, i),
                 "y" => _match_geometry!(y, op, i),
                 "width" => _match_geometry!(width, op, (i as u16)),
                 "height" => _match_geometry!(height, op, (i as u16)),
-                wrong @ _ => panic!("wrong geometry attribute {}", wrong),
+                wrong => panic!("wrong geometry attribute {wrong}"),
             },
 
             _ => {
@@ -438,11 +438,11 @@ fn parse_item(tokens: &mut Tokens) -> Option<FilterItem> {
             }
 
             Some(FilterItem {
-                action: action,
+                action,
                 rule: cond,
             })
         }
-        _ => return None,
+        _ => None,
     }
 }
 
@@ -510,10 +510,7 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                         Predicate::Id => Matcher::Wildcard(s.clone()),
                         Predicate::Name => Matcher::Wildcard(s.clone()),
                         Predicate::Attr(ref a) if a == "override_redirect" => {
-                            Matcher::BoolValue(match s.to_lowercase().as_str() {
-                                "0" | "false" => false,
-                                _ => true,
-                            })
+                            Matcher::BoolValue(!matches!(s.to_lowercase().as_str(), "0" | "false"))
                         }
                         Predicate::Attr(ref a) if a == "map_state" => {
                             Matcher::MapStateValue(match s.to_lowercase().as_str() {
@@ -528,9 +525,9 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
                     };
 
                     Some(FilterRule::Single {
-                        pred: pred,
+                        pred,
                         op: op.clone(),
-                        matcher: matcher,
+                        matcher,
                     })
                 }
 
@@ -597,11 +594,7 @@ pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
         .collect();
     let mut need_act = false;
 
-    loop {
-        let ch = match chars.next() {
-            Some(c) => c,
-            None => break,
-        };
+    while let Some(ch) = chars.next() {
 
         match ch {
             '=' => {
@@ -667,10 +660,7 @@ pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
 
             _ => {
                 // scan string literal
-                let compound_str = match ch {
-                    '\'' | '"' => true,
-                    _ => false,
-                };
+                let compound_str = matches!(ch, '\'' | '"');
 
                 let mut s = String::new();
                 if !compound_str {
@@ -706,7 +696,7 @@ pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
                     "not" => append_tok!(tokens, NOT),
                     "pin" if need_act => append_tok!(tokens, ACTION(Action::Pin)),
                     "filter" if need_act => append_tok!(tokens, ACTION(Action::FilterOut)),
-                    lowered @ _ => append_tok!(tokens, StrLit(lowered.to_string())),
+                    lowered => append_tok!(tokens, StrLit(lowered.to_string())),
                 }
             }
         }

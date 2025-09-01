@@ -22,6 +22,11 @@ pub struct OptimizedWildcardMatcher;
 impl OptimizedWildcardMatcher {
     /// Match a string against a pattern with caching
     pub fn match_pattern(pattern: &str, text: &str) -> bool {
+        // Handle edge cases
+        if pattern.is_empty() {
+            return text.is_empty();
+        }
+        
         // For simple patterns without wildcards, use direct comparison
         if !Self::is_wildcard_pattern(pattern) {
             return text.contains(pattern);
@@ -202,20 +207,30 @@ mod tests {
 
     #[test]
     fn test_cache_behavior() {
-        // Clear cache first
+        // Use a unique pattern unlikely to be used by other tests
+        let unique_pattern1 = "cache_test_pattern_unique_1*";
+        let unique_pattern2 = "*cache_test_pattern_unique_2";
+        
+        // Clear cache and immediately get size (should be 0)
+        OptimizedWildcardMatcher::clear_cache();
+        
+        // Use a pattern - should create exactly 1 cache entry
+        OptimizedWildcardMatcher::match_pattern(unique_pattern1, "cache_test_pattern_unique_1_match");
+        
+        // Clear again and use single pattern to test caching behavior
         OptimizedWildcardMatcher::clear_cache();
         assert_eq!(OptimizedWildcardMatcher::cache_stats(), 0);
         
-        // Use a pattern
-        OptimizedWildcardMatcher::match_pattern("test*", "test123");
+        // Use pattern once
+        OptimizedWildcardMatcher::match_pattern(unique_pattern1, "match1");
         assert_eq!(OptimizedWildcardMatcher::cache_stats(), 1);
         
-        // Use same pattern again - should hit cache
-        OptimizedWildcardMatcher::match_pattern("test*", "test456");
+        // Use same pattern again - should not increase cache
+        OptimizedWildcardMatcher::match_pattern(unique_pattern1, "match2");
         assert_eq!(OptimizedWildcardMatcher::cache_stats(), 1);
         
-        // Use different pattern
-        OptimizedWildcardMatcher::match_pattern("*test", "123test");
+        // Use different pattern - should increase cache
+        OptimizedWildcardMatcher::match_pattern(unique_pattern2, "match3");
         assert_eq!(OptimizedWildcardMatcher::cache_stats(), 2);
     }
 

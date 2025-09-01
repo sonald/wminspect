@@ -52,7 +52,6 @@ impl From<bincode::Error> for WmError {
 //         WmError::XcbError(err.to_string())
 //     }
 // }
-
 /// Result type alias for window manager operations
 pub type WmResult<T> = Result<T, WmError>;
 

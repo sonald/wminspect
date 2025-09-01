@@ -48,11 +48,11 @@ macro_rules! wm_warn {
 #[macro_export]
 macro_rules! wm_span {
     ($level:expr, $name:expr) => {
-        use crate::core::tracing::{span, Level};
+        use $crate::core::tracing::{span, Level};
         span!($level, $name)
     };
     ($level:expr, $name:expr, $($field:tt)*) => {
-        use crate::core::tracing::{span, Level};
+        use $crate::core::tracing::{span, Level};
         span!($level, $name, $($field)*)
     };
 }
