@@ -108,7 +108,6 @@ pub fn main() {
 
     #[cfg(feature = "x11")]
     {
-        let mut ctx = wm::Context::new(&ewmh, f);
         let mut formatter = core::colorized_output::ColorizedFormatter::new();
         
         // Configure output mode
@@ -120,11 +119,15 @@ pub fn main() {
             formatter.set_mode(core::colorized_output::OutputMode::Colorized);
         }
         
+        let mut ctx = wm::Context::new_with_formatter(&ewmh, f, formatter);
+        
         if matches.get_flag("only-mapped") { ctx.set_mapped_only(); }
         if matches.get_flag("omit-hidden") { ctx.set_omit_hidden(); }
         if matches.get_flag("no-special") { ctx.set_no_special(); }
         if matches.get_flag("diff") { ctx.set_show_diff(); }
         if matches.get_flag("clients-only") { ctx.set_clients_only(); }
+        if matches.get_flag("no-override-redirect") { ctx.set_no_override_redirect(); }
+        if matches.get_flag("num") { ctx.set_show_sequence_numbers(); }
 
         if matches.get_flag("monitor") || matches.subcommand_matches("monitor").is_some() {
             wm::monitor(&ctx);

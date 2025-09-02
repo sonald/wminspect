@@ -37,6 +37,8 @@ owo-colors = "4.2"
 flamegraph = "0.6"
 once_cell = "1.21"
 term_size = "0.3"
+crossterm = { version = "0.27", optional = true }
+ratatui = { version = "0.24", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2.0"
@@ -50,7 +52,7 @@ grcov = "0.8"
 [features]
 default = ["x11", "gui"]
 x11 = ["xcb", "xcb-util"]
-gui = []
+gui = ["crossterm", "ratatui"]
 platform-linux = []
 platform-windows = []
 platform-macos = []

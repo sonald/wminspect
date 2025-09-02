@@ -45,6 +45,12 @@ impl From<bincode::Error> for WmError {
     }
 }
 
+/// Result type alias for window manager operations
+pub type WmResult<T> = Result<T, WmError>;
+
+/// Result type alias for core operations
+pub type CoreResult<T> = Result<T, WmError>;
+
 #[cfg(feature = "x11")]
 // Commented out due to XCB API changes
 // impl From<xcb::Error> for WmError {
@@ -52,12 +58,6 @@ impl From<bincode::Error> for WmError {
 //         WmError::XcbError(err.to_string())
 //     }
 // }
-
-/// Result type alias for window manager operations
-pub type WmResult<T> = Result<T, WmError>;
-
-/// Result type alias for core operations
-pub type CoreResult<T> = Result<T, WmError>;
 
 /// Result type alias for DSL operations
 pub type DslResult<T> = Result<T, WmError>;

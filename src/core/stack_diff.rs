@@ -95,12 +95,17 @@ impl CachedStackDiff {
             }
         }
 
-        // Find removed windows
-        for &window_id in self.previous_stack.keys() {
+        // Find removed windows (maintain original order)
+        let mut removed_windows: Vec<(WindowId, usize)> = Vec::new();
+        for (&window_id, &pos) in &self.previous_stack {
             if !current_map.contains_key(&window_id) {
-                diff.removed.push(window_id);
+                removed_windows.push((window_id, pos));
             }
         }
+        
+        // Sort by position to maintain order
+        removed_windows.sort_by_key(|&(_, pos)| pos);
+        diff.removed = removed_windows.into_iter().map(|(id, _)| id).collect();
 
         // Update cache
         self.update_cache(current_stack, current_hash, diff.clone());
@@ -177,9 +182,12 @@ mod tests {
         let diff = diff_calc.compute_diff(&new_stack);
         
         assert_eq!(diff.removed, vec![2, 4]);
-        assert_eq!(diff.unchanged, vec![1, 3, 5]);
+        assert_eq!(diff.unchanged, vec![1]); // Only window 1 stays in same position (0)
         assert!(diff.added.is_empty());
-        assert!(diff.moved.is_empty());
+        // Windows 3 and 5 moved positions: 3 from pos 2 to 1, 5 from pos 4 to 2
+        assert_eq!(diff.moved.len(), 2);
+        assert!(diff.moved.contains(&(3, 2, 1)));
+        assert!(diff.moved.contains(&(5, 4, 2)));
     }
 
     #[test]

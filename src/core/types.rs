@@ -119,7 +119,7 @@ impl Display for Window {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Condition {
     Colorful,
     MappedOnly,
@@ -127,6 +127,8 @@ pub enum Condition {
     NoSpecial,
     ShowDiff,
     ClientsOnly,
+    NoOverrideRedirect,
+    ShowSequenceNumbers,
 }
 
 pub type WindowId = u32;

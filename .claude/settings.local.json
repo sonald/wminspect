@@ -15,7 +15,10 @@
       "Bash(./target/debug/wminspect:*)",
       "Bash(xwininfo:*)",
       "Bash(RUST_LOG=debug ./target/debug/wminspect)",
-      "Bash(timeout 5 ./target/debug/wminspect:*)"
+      "Bash(timeout 5 ./target/debug/wminspect:*)",
+      "Bash(gh pr view:*)",
+      "Bash(git push:*)",
+      "Bash(RUST_BACKTRACE=1 cargo test --lib test_cache_behavior -- --nocapture)"
     ],
     "deny": [],
     "ask": [],

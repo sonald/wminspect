@@ -17,6 +17,12 @@ pub struct WindowsLayout {
     pub pinned_windows: WindowListView,
 }
 
+impl Default for WindowsLayout {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WindowsLayout {
     pub fn new() -> Self {
         Self {
@@ -183,11 +189,7 @@ impl GlobalState {
         F: FnOnce(&mut Window) -> R,
     {
         let mut layout = self.write_layout();
-        if let Some(window) = layout.get_window_mut(window_id) {
-            Some(f(window))
-        } else {
-            None
-        }
+        layout.get_window_mut(window_id).map(f)
     }
 
     /// Execute a closure with read access to a window
@@ -196,11 +198,7 @@ impl GlobalState {
         F: FnOnce(&Window) -> R,
     {
         let layout = self.read_layout();
-        if let Some(window) = layout.get_window(window_id) {
-            Some(f(window))
-        } else {
-            None
-        }
+        layout.get_window(window_id).map(f)
     }
 
     /// Clone the current state (for testing or backup purposes)
