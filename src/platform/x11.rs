@@ -15,6 +15,7 @@ use crate::dsl::Filter;
 #[cfg(feature = "x11")]
 use crate::{wm_info, wm_trace};
 
+
 // XCB event handling functions removed due to API changes
 
 
@@ -99,8 +100,8 @@ impl<'a> Context<'a> {
         }
         
         // Check NoSpecial condition - ignore special windows (docks, panels, etc.)
-        if self.state.has_option(&Condition::NoSpecial) && 
-           self.is_special_window(window, attrs) {
+        if self.state.has_option(&Condition::NoSpecial) &&
+           (self.is_special_window(window, attrs) || self.is_special_window_type(window.id)) {
             return false;
         }
         
@@ -146,6 +147,39 @@ impl<'a> Context<'a> {
         false
     }
 
+    /// Get client window list from the window manager.
+    fn get_client_windows(&self) -> Vec<u32> {
+        ewmh::get_client_list(self.c, 0)
+            .get_reply()
+            .map(|reply| reply.windows().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Detect special windows by EWMH type metadata.
+    fn is_special_window_type(&self, window_id: u32) -> bool {
+        let Ok(reply) = ewmh::get_wm_window_type(self.c, window_id).get_reply() else {
+            return false;
+        };
+
+        for atom in reply.atoms() {
+            let Ok(atom_name_reply) = xproto::get_atom_name(self.c, *atom).get_reply() else {
+                continue;
+            };
+            let name = atom_name_reply.name();
+            if name.contains("_NET_WM_WINDOW_TYPE_DOCK")
+                || name.contains("_NET_WM_WINDOW_TYPE_PANEL")
+                || name.contains("_NET_WM_WINDOW_TYPE_DESKTOP")
+                || name.contains("_NET_WM_WINDOW_TYPE_SPLASH")
+                || name.contains("_NET_WM_WINDOW_TYPE_TOOLBAR")
+                || name.contains("_NET_WM_WINDOW_TYPE_MENU")
+            {
+                return true;
+            }
+        }
+
+        false
+    }
+
     pub fn refresh_windows(&self) {
         wm_info!("Refreshing windows...");
 
@@ -159,65 +193,95 @@ impl<'a> Context<'a> {
         };
         let children = tree.children();
 
-        let mut layout = self.state.write_layout();
-        layout.clear();
-
+        let mut windows = Vec::new();
         for win in children {
-            // Attempt to fetch window information with proper error handling
             if let Some(window) = self.fetch_window_info(*win) {
-                // First check command-line conditions before applying user-defined filters
-                if self.check_window_conditions(&window, &window.attrs) {
-                    let include = self.state.read_filter().apply_to(&window);
-                    layout.stack_view.push(*win);
-                    if include {
-                        layout.filtered_view.push(*win);
+                windows.push(window);
+            }
+        }
+
+        {
+            let mut layout = self.state.write_layout();
+            layout.clear();
+            layout.stack_view = windows.iter().map(|w| w.id).collect();
+            for window in windows {
+                layout.insert_window(window);
+            }
+        }
+
+        self.apply_filter();
+
+        let layout = self.state.read_layout();
+        wm_info!(
+            "Refreshed {} windows, {} passed filter",
+            layout.window_count(),
+            layout.filtered_view.len()
+        );
+    }
+
+    fn apply_filter(&self) {
+        let filter = self.state.read_filter();
+        let clients_only = self.state.has_option(&Condition::ClientsOnly);
+
+        let filtered_view = {
+            let layout = self.state.read_layout();
+            let window_ids_to_check = if clients_only {
+                self.get_client_windows()
+            } else {
+                layout.stack_view.clone()
+            };
+
+            let mut filtered_view = Vec::new();
+            for window_id in &window_ids_to_check {
+                let window = layout
+                    .windows
+                    .get(window_id)
+                    .cloned()
+                    .or_else(|| self.fetch_window_info(*window_id));
+
+                if let Some(window) = window {
+                    if !self.check_window_conditions(&window, &window.attrs) {
+                        continue;
                     }
-                    layout.insert_window(window);
+                    if filter.rule_count() > 0 && !filter.apply_to(&window) {
+                        continue;
+                    }
+                    filtered_view.push(*window_id);
                 }
             }
-            // If window info fetch failed, we skip the window (already logged in fetch_window_info)
-        }
+
+            filtered_view
+        };
+
+        let mut layout = self.state.write_layout();
+        layout.filtered_view = filtered_view;
     }
 
     /// Fetch complete window information with graceful error handling
     fn fetch_window_info(&self, win: u32) -> Option<CoreWindow> {
         let attrs_cookie = xproto::get_window_attributes(self.c, win);
         let geom_cookie = xproto::get_geometry(self.c, win);
-        let name_cookie = ewmh::get_wm_name(self.c, win);
 
-        // Try to get all information, but don't fail completely if some is missing
         let attrs_result = attrs_cookie.get_reply();
         let geom_result = geom_cookie.get_reply();
-        let name_result = name_cookie.get_reply();
 
-        // Log specific failures for debugging
         let mut has_critical_data = true;
         if let Err(e) = &attrs_result {
             wm_trace!("Failed to get attributes for window 0x{:x}: {}", win, e);
-            // Attributes are critical - we can't determine window state without them
             has_critical_data = false;
         }
         if let Err(e) = &geom_result {
             wm_trace!("Failed to get geometry for window 0x{:x}: {}", win, e);
-            // Geometry is critical for proper window representation
             has_critical_data = false;
         }
-        if let Err(e) = &name_result {
-            wm_trace!("Failed to get name for window 0x{:x}: {}", win, e);
-            // Name is not critical - we can default to empty
-        }
 
-        // If we can't get critical information, skip this window
         if !has_critical_data {
             return None;
         }
 
         let attrs = attrs_result.ok()?;
         let geom = geom_result.ok()?;
-        let name = name_result
-            .ok()
-            .map(|r| r.string().to_string())
-            .unwrap_or_default();
+        let name = self.get_window_name(win).unwrap_or_default();
 
         let attributes = self.map_attributes(&attrs);
         let geometry = self.map_geometry(&geom);
@@ -229,6 +293,38 @@ impl<'a> Context<'a> {
             geom: geometry,
             valid: true,
         })
+    }
+
+    fn get_window_name(&self, window_id: u32) -> Option<String> {
+        self.get_ewmh_window_name(window_id)
+            .or_else(|| self.get_wm_name(window_id))
+    }
+
+    fn get_ewmh_window_name(&self, window_id: u32) -> Option<String> {
+        ewmh::get_wm_name(self.c, window_id)
+            .get_reply()
+            .ok()
+            .map(|reply| reply.string().to_string())
+    }
+
+    fn get_wm_name(&self, window_id: u32) -> Option<String> {
+        let reply = xproto::get_property(
+            self.c,
+            false,
+            window_id,
+            xproto::ATOM_WM_NAME,
+            xproto::ATOM_STRING,
+            0,
+            1024,
+        )
+        .get_reply()
+        .ok()?;
+
+        if reply.value_len() == 0 {
+            return None;
+        }
+
+        String::from_utf8(reply.value().to_vec()).ok()
     }
 
     /// Map X11 attributes to internal representation with proper defaults
@@ -258,12 +354,20 @@ impl<'a> Context<'a> {
         let show_diff = self.state.has_option(&Condition::ShowDiff);
 
         for (i, wid) in layout.filtered_view.iter().enumerate() {
-            if let Some(w) = layout.windows.get(wid) {
+            let window = layout
+                .windows
+                .get(wid)
+                .cloned()
+                .or_else(|| self.fetch_window_info(*wid));
+
+            if let Some(w) = window {
                 let geom_str = format!("{}", w.geom);
                 let attrs_str = format!("{}", w.attrs);
-                let is_diff = show_diff && changes.is_some() && changes.as_ref().unwrap().contains(wid);
-                
-                let formatted_output = self.formatter.format_window_entry(i, w.id, &w.name, &geom_str, &attrs_str, is_diff);
+                let is_diff =
+                    show_diff && changes.is_some() && changes.as_ref().unwrap().contains(wid);
+                let formatted_output =
+                    self.formatter
+                        .format_window_entry(i, w.id, &w.name, &geom_str, &attrs_str, is_diff);
                 println!("{}", formatted_output);
             }
         }
@@ -276,33 +380,83 @@ pub fn monitor(ctx: &Context) {
     let show_sequence = ctx.state.has_option(&Condition::ShowSequenceNumbers);
     let mut event_count = 0u32;
 
-    // Initial window state
     if show_sequence {
         println!("Event #{}: Initial window state", event_count);
     }
     ctx.refresh_windows();
     ctx.dump_windows(None);
 
-    // Monitor for events with sleep to prevent high CPU usage
-    use std::thread::sleep;
-    use std::time::Duration;
-    
+    let event_mask = xproto::EVENT_MASK_STRUCTURE_NOTIFY
+        | xproto::EVENT_MASK_PROPERTY_CHANGE
+        | xproto::EVENT_MASK_SUBSTRUCTURE_NOTIFY;
+
+    let change_attrs =
+        xcb::change_window_attributes(ctx.c, ctx.root, &[(xproto::CW_EVENT_MASK, event_mask)]);
+    if change_attrs.request_check().is_err() {
+        wm_info!("Failed to set event mask");
+        return;
+    }
+
+    wm_info!("Monitor mode active - watching for window events...");
+
     loop {
-        if let Some(_event) = ctx.c.poll_for_event() {
-            event_count += 1;
-            wm_trace!("event received");
-            
-            if show_sequence {
-                println!("Event #{}: Window change detected", event_count);
+        match ctx.c.wait_for_event() {
+            Some(event) => {
+                let description = match event.response_type() & !0x80 {
+                    xproto::CONFIGURE_NOTIFY => {
+                        let notify: &xproto::ConfigureNotifyEvent =
+                            unsafe { xcb::cast_event(&event) };
+                        Some(format!(
+                            "Window configured: 0x{:x} {}x{}+{}+{}",
+                            notify.window(),
+                            notify.width(),
+                            notify.height(),
+                            notify.x(),
+                            notify.y()
+                        ))
+                    }
+                    xproto::MAP_NOTIFY => {
+                        let notify: &xproto::MapNotifyEvent = unsafe { xcb::cast_event(&event) };
+                        Some(format!("Window mapped: 0x{:x}", notify.window()))
+                    }
+                    xproto::UNMAP_NOTIFY => {
+                        let notify: &xproto::UnmapNotifyEvent = unsafe { xcb::cast_event(&event) };
+                        Some(format!("Window unmapped: 0x{:x}", notify.window()))
+                    }
+                    xproto::CREATE_NOTIFY => {
+                        let notify: &xproto::CreateNotifyEvent = unsafe { xcb::cast_event(&event) };
+                        Some(format!("Window created: 0x{:x}", notify.window()))
+                    }
+                    xproto::DESTROY_NOTIFY => {
+                        let notify: &xproto::DestroyNotifyEvent =
+                            unsafe { xcb::cast_event(&event) };
+                        Some(format!("Window destroyed: 0x{:x}", notify.window()))
+                    }
+                    xproto::PROPERTY_NOTIFY => {
+                        let notify: &xproto::PropertyNotifyEvent =
+                            unsafe { xcb::cast_event(&event) };
+                        Some(format!("Window property changed: 0x{:x}", notify.window()))
+                    }
+                    _ => None,
+                };
+
+                if let Some(description) = description {
+                    event_count += 1;
+                    wm_trace!("event received: {}", description);
+                    if show_sequence {
+                        println!("Event #{}: {}", event_count, description);
+                    }
+                    ctx.refresh_windows();
+                    ctx.dump_windows(None);
+                }
             }
-            
-            ctx.refresh_windows();
-            ctx.dump_windows(None);
-        } else {
-            // No event available, sleep briefly to reduce CPU usage
-            sleep(Duration::from_millis(20));
+            None => {
+                wm_info!("X11 connection lost, exiting monitor mode");
+                break;
+            }
         }
     }
+    wm_info!("Monitor mode ended");
 }
 
 #[cfg(not(feature = "x11"))]

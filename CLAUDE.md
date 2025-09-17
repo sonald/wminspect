@@ -6,6 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 wminspect is a powerful X11 window manager inspector and monitoring tool with a rich DSL for filtering and tracking window events. It provides real-time monitoring, window filtering, rule serialization, and flexible highlighting capabilities.
 
+**Current Version**: 0.4.0  
+**Rust Edition**: 2024 (upgraded from 2021)  
+**Key Recent Updates**: 
+- Modernized dependencies (2025 latest versions)
+- Enhanced macOS support with Apple Silicon compatibility
+- Eliminated all build warnings
+- Refactored filtering architecture to maintain original design philosophy
+
 ## Development Commands
 
 ### Building and Testing
@@ -49,14 +57,17 @@ cargo bench
 
 ### Running the Application
 ```bash
-# Basic window inspection
+# Basic window inspection (shows ALL windows by default)
 ./target/debug/wminspect
 
 # Monitor mode with colored output
 ./target/debug/wminspect -m -c
 
-# Test filtering syntax
-./target/debug/wminspect -f "name=*firefox*"
+# Show only client windows (wmctrl compatibility)
+./target/debug/wminspect -C
+
+# Test DSL filtering (note: use :filter action for inclusion)
+./target/debug/wminspect -f "name=*Chrome*:filter"
 
 # Show DSL grammar
 ./target/debug/wminspect --show-grammar
@@ -172,3 +183,51 @@ The project uses a layered error handling approach:
 - Binary serialization preferred for production rule loading
 - Wildcard patterns are pre-compiled and cached via `GLOB_CACHE`
 - Event processing uses async patterns to avoid blocking main thread
+
+## Window Filtering Architecture - CRITICAL UNDERSTANDING
+
+wminspect follows a **parameter-based filtering** design philosophy:
+
+### Default Behavior (No Parameters)
+- Shows **ALL** windows collected from X11 window tree (~126 windows typically)
+- Similar to `xwininfo -root -tree` behavior  
+- **NO automatic filtering applied**
+
+### Parameter-Based Filtering
+Only when specific parameters are provided should filtering occur:
+
+- `-v/--only-mapped`: Filter to only mapped/viewable windows
+- `-C/--clients-only`: Show only EWMH client windows (matches `wmctrl -l` output)
+- `-s/--no-special`: Filter out special window types (panels, docks, desktop windows)
+- `-O/--no-override-redirect`: Filter out override-redirect windows (popups, tooltips)
+
+### CRITICAL: Never Add Default Filtering
+- **DO NOT** apply `wmctrl`-like filtering by default
+- **DO NOT** automatically filter small windows, generic names, etc.
+- Only filter when explicitly requested via command-line parameters
+
+This design ensures compatibility with the original wminspect philosophy of showing complete window hierarchy unless specifically filtered.
+
+## Testing with X11 Display
+
+When testing wminspect functionality, use `DISPLAY=:0` to access the X11 display:
+
+```bash
+# Test basic functionality
+DISPLAY=:0 ./target/debug/wminspect
+
+# Test filtering options  
+DISPLAY=:0 ./target/debug/wminspect -C
+DISPLAY=:0 ./target/debug/wminspect -s
+DISPLAY=:0 ./target/debug/wminspect -v
+
+# Compare with reference tools
+DISPLAY=:0 wmctrl -l
+DISPLAY=:0 xwininfo -root -tree
+```
+
+# Development Instructions
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+ALWAYS prefer editing an existing file to creating a new one.
+NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.

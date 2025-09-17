@@ -18,7 +18,14 @@
       "Bash(timeout 5 ./target/debug/wminspect:*)",
       "Bash(gh pr view:*)",
       "Bash(git push:*)",
-      "Bash(RUST_BACKTRACE=1 cargo test --lib test_cache_behavior -- --nocapture)"
+      "Bash(RUST_BACKTRACE=1 cargo test --lib test_cache_behavior -- --nocapture)",
+      "Bash(DISPLAY=:0 wmctrl -l)",
+      "Bash(DISPLAY=:0 xwininfo -tree -root)",
+      "Bash(sudo apt:*)",
+      "Bash(sudo apt install:*)",
+      "Bash(DISPLAY=:0 ./target/debug/wminspect)",
+      "Bash(timeout:*)",
+      "Bash(DISPLAY=:0 xwininfo -root -tree)"
     ],
     "deny": [],
     "ask": [],
