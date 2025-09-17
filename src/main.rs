@@ -123,8 +123,10 @@ pub fn main() {
         if matches.get_flag("only-mapped") { ctx.set_mapped_only(); }
         if matches.get_flag("omit-hidden") { ctx.set_omit_hidden(); }
         if matches.get_flag("no-special") { ctx.set_no_special(); }
+        if matches.get_flag("no-override-redirect") { ctx.set_no_override_redirect(); }
         if matches.get_flag("diff") { ctx.set_show_diff(); }
         if matches.get_flag("clients-only") { ctx.set_clients_only(); }
+        if matches.get_flag("colored") { ctx.set_colorful(); }
 
         if matches.get_flag("monitor") || matches.subcommand_matches("monitor").is_some() {
             wm::monitor(&ctx);

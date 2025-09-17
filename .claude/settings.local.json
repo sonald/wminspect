@@ -15,7 +15,14 @@
       "Bash(./target/debug/wminspect:*)",
       "Bash(xwininfo:*)",
       "Bash(RUST_LOG=debug ./target/debug/wminspect)",
-      "Bash(timeout 5 ./target/debug/wminspect:*)"
+      "Bash(timeout 5 ./target/debug/wminspect:*)",
+      "Bash(DISPLAY=:0 wmctrl -l)",
+      "Bash(DISPLAY=:0 xwininfo -tree -root)",
+      "Bash(sudo apt:*)",
+      "Bash(sudo apt install:*)",
+      "Bash(DISPLAY=:0 ./target/debug/wminspect)",
+      "Bash(timeout:*)",
+      "Bash(DISPLAY=:0 xwininfo -root -tree)"
     ],
     "deny": [],
     "ask": [],

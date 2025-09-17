@@ -127,6 +127,7 @@ pub enum Condition {
     NoSpecial,
     ShowDiff,
     ClientsOnly,
+    NoOverrideRedirect,
 }
 
 pub type WindowId = u32;

@@ -333,8 +333,61 @@ impl FilterRule {
                 }
             },
 
-            _ => {
-                panic!("not implement"); 
+            // Handle Id with IntegralValue matcher
+            (&Predicate::Id, op, &Matcher::IntegralValue(i)) => {
+                match *op {
+                    Op::Eq => Box::new(move |ref w| w.id == (i as u32)),
+                    Op::Neq => Box::new(move |ref w| w.id != (i as u32)),
+                    Op::GT => Box::new(move |ref w| w.id > (i as u32)),
+                    Op::LT => Box::new(move |ref w| w.id < (i as u32)),
+                    Op::GE => Box::new(move |ref w| w.id >= (i as u32)),
+                    Op::LE => Box::new(move |ref w| w.id <= (i as u32)),
+                }
+            },
+
+            // Handle Name with IntegralValue matcher (convert to string comparison)
+            (&Predicate::Name, op, &Matcher::IntegralValue(i)) => {
+                let s = i.to_string();
+                match *op {
+                    Op::Eq => Box::new(move |ref w| w.name == s),
+                    Op::Neq => Box::new(move |ref w| w.name != s),
+                    _ => Box::new(|_w| false), // Other ops don't make sense for names
+                }
+            },
+
+            // Handle Geom with Wildcard matcher (convert to string comparison)
+            (&Predicate::Geom(ref g), op, &Matcher::Wildcard(ref pat)) => {
+                let pat = pat.clone();
+                let geo_attr = g.clone();
+                match *op {
+                    Op::Eq => Box::new(move |ref w| {
+                        let value_str = match geo_attr.as_str() {
+                            "x" => w.geom.x.to_string(),
+                            "y" => w.geom.y.to_string(),
+                            "width" => w.geom.width.to_string(),
+                            "height" => w.geom.height.to_string(),
+                            _ => return false,
+                        };
+                        OptimizedWildcardMatcher::match_pattern(&pat, &value_str)
+                    }),
+                    Op::Neq => Box::new(move |ref w| {
+                        let value_str = match geo_attr.as_str() {
+                            "x" => w.geom.x.to_string(),
+                            "y" => w.geom.y.to_string(),
+                            "width" => w.geom.width.to_string(),
+                            "height" => w.geom.height.to_string(),
+                            _ => return false,
+                        };
+                        !OptimizedWildcardMatcher::match_pattern(&pat, &value_str)
+                    }),
+                    _ => Box::new(|_w| false), // Other ops with wildcards don't make sense
+                }
+            },
+
+            // Fallback case - log the unimplemented combination
+            (pred, op, matcher) => {
+                wm_error!("Unimplemented predicate/op/matcher combination: {:?}/{:?}/{:?}", pred, op, matcher);
+                Box::new(|_w| false)
             }
         }
     }
@@ -598,6 +651,16 @@ pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
             ')' => { append_tok!(tokens, RBRACE); },
 
             _ if ch.is_whitespace() => {},
+
+            '#' => {
+                // Skip comment until end of line
+                loop {
+                    match chars.peek() {
+                        Some('\n') | None => break,
+                        _ => { chars.next(); }
+                    }
+                }
+            },
 
             _ => {
                 // scan string literal
