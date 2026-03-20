@@ -18,6 +18,24 @@ use crate::{wm_info, wm_trace};
 
 // XCB event handling functions removed due to API changes
 
+#[cfg(feature = "x11")]
+fn geometry_from_components(
+    relative_x: i16,
+    relative_y: i16,
+    width: u16,
+    height: u16,
+    absolute_position: Option<(i16, i16)>,
+) -> Geometry {
+    let (x, y) = absolute_position.unwrap_or((relative_x, relative_y));
+
+    Geometry {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
 
 #[cfg(feature = "x11")]
 pub struct Context<'a> {
@@ -261,9 +279,11 @@ impl<'a> Context<'a> {
     fn fetch_window_info(&self, win: u32) -> Option<CoreWindow> {
         let attrs_cookie = xproto::get_window_attributes(self.c, win);
         let geom_cookie = xproto::get_geometry(self.c, win);
+        let translate_cookie = xproto::translate_coordinates(self.c, win, self.root, 0, 0);
 
         let attrs_result = attrs_cookie.get_reply();
         let geom_result = geom_cookie.get_reply();
+        let translate_result = translate_cookie.get_reply();
 
         let mut has_critical_data = true;
         if let Err(e) = &attrs_result {
@@ -274,6 +294,13 @@ impl<'a> Context<'a> {
             wm_trace!("Failed to get geometry for window 0x{:x}: {}", win, e);
             has_critical_data = false;
         }
+        if let Err(e) = &translate_result {
+            wm_trace!(
+                "Failed to translate coordinates for window 0x{:x}, falling back to relative geometry: {}",
+                win,
+                e
+            );
+        }
 
         if !has_critical_data {
             return None;
@@ -282,9 +309,16 @@ impl<'a> Context<'a> {
         let attrs = attrs_result.ok()?;
         let geom = geom_result.ok()?;
         let name = self.get_window_name(win).unwrap_or_default();
+        let absolute_position = translate_result.ok().and_then(|reply| {
+            if reply.same_screen() {
+                Some((reply.dst_x(), reply.dst_y()))
+            } else {
+                None
+            }
+        });
 
         let attributes = self.map_attributes(&attrs);
-        let geometry = self.map_geometry(&geom);
+        let geometry = self.map_geometry(&geom, absolute_position);
 
         Some(CoreWindow {
             id: win,
@@ -340,13 +374,18 @@ impl<'a> Context<'a> {
     }
 
     /// Map X11 geometry to internal representation
-    fn map_geometry(&self, geom: &xproto::GetGeometryReply) -> Geometry {
-        Geometry {
-            x: geom.x(),
-            y: geom.y(),
-            width: geom.width(),
-            height: geom.height(),
-        }
+    fn map_geometry(
+        &self,
+        geom: &xproto::GetGeometryReply,
+        absolute_position: Option<(i16, i16)>,
+    ) -> Geometry {
+        geometry_from_components(
+            geom.x(),
+            geom.y(),
+            geom.width(),
+            geom.height(),
+            absolute_position,
+        )
     }
 
     pub fn dump_windows(&self, changes: Option<WindowListView>) {
@@ -581,6 +620,26 @@ mod tests {
         };
         
         (window, attrs)
+    }
+
+    #[test]
+    fn test_geometry_prefers_absolute_position() {
+        let geometry = geometry_from_components(0, 0, 400, 300, Some((120, 240)));
+
+        assert_eq!(geometry.x, 120);
+        assert_eq!(geometry.y, 240);
+        assert_eq!(geometry.width, 400);
+        assert_eq!(geometry.height, 300);
+    }
+
+    #[test]
+    fn test_geometry_falls_back_to_relative_position() {
+        let geometry = geometry_from_components(16, 32, 400, 300, None);
+
+        assert_eq!(geometry.x, 16);
+        assert_eq!(geometry.y, 32);
+        assert_eq!(geometry.width, 400);
+        assert_eq!(geometry.height, 300);
     }
 
     #[test]
