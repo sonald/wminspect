@@ -23,7 +23,7 @@ pub fn main() {
     init_tracing();
     info!("Application started");
     let matches = Command::new("wminspect")
-        .version("0.3.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("Window Manager Inspector Team")
         .about("A tool for inspecting X11 window manager state and monitoring window events")
         .long_about("wminspect is a comprehensive tool for inspecting X11 window manager state, \nmonitoring window events, and applying filtering rules to window collections.")

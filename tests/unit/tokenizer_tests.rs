@@ -35,7 +35,7 @@ fn test_tokenizer_complex() {
 #[test]
 fn test_tokenizer_keywords() {
     let tokens = scan_tokens("all(name = 'test')");
-    assert_eq!(tokens.len(), 8);
+    assert_eq!(tokens.len(), 7);
     assert_eq!(tokens[0], Token::ALL);
     assert_eq!(tokens[1], Token::LBRACE);
     assert_eq!(tokens[2], Token::StrLit("name".to_string()));

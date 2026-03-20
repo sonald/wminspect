@@ -378,6 +378,7 @@ impl<'a> Context<'a> {
 pub fn monitor(ctx: &Context) {
     wm_info!("Starting monitor mode...");
     let show_sequence = ctx.state.has_option(&Condition::ShowSequenceNumbers);
+    let run_once = std::env::var_os("WMINSPECT_MONITOR_ONCE").is_some();
     let mut event_count = 0u32;
 
     if show_sequence {
@@ -385,6 +386,10 @@ pub fn monitor(ctx: &Context) {
     }
     ctx.refresh_windows();
     ctx.dump_windows(None);
+    if run_once {
+        wm_info!("Monitor mode single-shot run completed");
+        return;
+    }
 
     let event_mask = xproto::EVENT_MASK_STRUCTURE_NOTIFY
         | xproto::EVENT_MASK_PROPERTY_CHANGE

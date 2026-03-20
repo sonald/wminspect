@@ -515,36 +515,44 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
     let tk = tokens.pop_front().unwrap();
     match tk {
         StrLit(ref s) => {
-            let mut pred = Predicate::Id;
-
-            match s.as_str() {
+            let pred = match s.as_str() {
                 "attrs" => {
                     match_tok!(tokens, DOT);
                     let tk = tokens.pop_front().unwrap();
                     if let StrLit(name) = tk {
-                        assert!(name == "map_state" || name == "override_redirect");
-                        pred = Predicate::Attr(name);
+                        if name == "map_state" || name == "override_redirect" {
+                            Predicate::Attr(name)
+                        } else {
+                            wm_error!("wrong attr token: {:?}", name);
+                            return None;
+                        }
                     } else {
                         wm_error!("wrong token: {:?}", tk);
+                        return None;
                     }
                 }
                 "geom" => {
                     match_tok!(tokens, DOT);
                     let tk = tokens.pop_front().unwrap();
                     if let StrLit(name) = tk {
-                        assert!(name == "x" || name == "y" || name == "width" || name == "height");
-                        pred = Predicate::Geom(name);
+                        if name == "x" || name == "y" || name == "width" || name == "height" {
+                            Predicate::Geom(name)
+                        } else {
+                            wm_error!("wrong geometry token: {:?}", name);
+                            return None;
+                        }
                     } else {
                         wm_error!("wrong token: {:?}", tk);
+                        return None;
                     }
                 }
 
                 "id" | "name" => {
-                    pred = if s == "id" {
+                    if s == "id" {
                         Predicate::Id
                     } else {
                         Predicate::Name
-                    };
+                    }
                 }
 
                 "clients" => {
@@ -553,10 +561,14 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
 
                 _ => {
                     wm_error!("wrong token: {:?}", s);
+                    return None;
                 }
-            }
+            };
 
-            assert!(tokens.len() >= 2);
+            if tokens.len() < 2 {
+                wm_error!("incomplete rule");
+                return None;
+            }
             match (tokens.pop_front().unwrap(), tokens.pop_front().unwrap()) {
                 (OP(ref op), StrLit(ref s)) => {
                     let matcher = match pred {

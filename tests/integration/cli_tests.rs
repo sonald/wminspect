@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use tempfile::tempdir;
 use std::fs;
+use tempfile::tempdir;
 
 #[cfg(test)]
 mod cli_integration_tests {
@@ -13,7 +13,7 @@ mod cli_integration_tests {
         cmd.arg("--help")
             .assert()
             .success()
-            .stdout(predicate::str::contains("window manager inspector"));
+            .stdout(predicate::str::contains("Usage: wminspect"));
     }
 
     #[test]
@@ -22,7 +22,7 @@ mod cli_integration_tests {
         cmd.arg("--version")
             .assert()
             .success()
-            .stdout(predicate::str::contains("wminspect 0.3.0"));
+            .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
     }
 
     #[test]
@@ -72,7 +72,8 @@ mod cli_integration_tests {
     #[test]
     fn test_monitor_flag() {
         let mut cmd = Command::cargo_bin("wminspect").unwrap();
-        cmd.arg("--monitor")
+        cmd.env("WMINSPECT_MONITOR_ONCE", "1")
+            .arg("--monitor")
             .assert()
             .success();
     }
@@ -80,7 +81,8 @@ mod cli_integration_tests {
     #[test]
     fn test_monitor_subcommand() {
         let mut cmd = Command::cargo_bin("wminspect").unwrap();
-        cmd.arg("monitor")
+        cmd.env("WMINSPECT_MONITOR_ONCE", "1")
+            .arg("monitor")
             .assert()
             .success();
     }
