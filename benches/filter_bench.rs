@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use wminspect::dsl::filter::{scan_tokens, parse_rule, wild_match, Filter};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use wminspect::dsl::filter::{Filter, parse_rule, scan_tokens, wild_match};
 
 fn benchmark_tokenizer(c: &mut Criterion) {
     let simple_rule = "name = test";
@@ -21,7 +21,8 @@ fn benchmark_tokenizer(c: &mut Criterion) {
 
 fn benchmark_parser(c: &mut Criterion) {
     let simple_tokens = scan_tokens("name = test");
-    let complex_tokens = scan_tokens("any(all(geom.width > 400, geom.height > 300), not(name = dde*))");
+    let complex_tokens =
+        scan_tokens("any(all(geom.width > 400, geom.height > 300), not(name = dde*))");
 
     c.bench_function("parse_simple", |b| {
         b.iter(|| {
@@ -88,14 +89,14 @@ fn benchmark_serialization(c: &mut Criterion) {
 
     c.bench_function("deserialize_json", |b| {
         b.iter(|| {
-            let _: Vec<wminspect::dsl::filter::FilterItem> = 
+            let _: Vec<wminspect::dsl::filter::FilterItem> =
                 serde_json::from_str(black_box(&json_data)).unwrap();
         })
     });
 
     c.bench_function("deserialize_bincode", |b| {
         b.iter(|| {
-            let _: Vec<wminspect::dsl::filter::FilterItem> = 
+            let _: Vec<wminspect::dsl::filter::FilterItem> =
                 bincode::deserialize(black_box(&bincode_data)).unwrap();
         })
     });
@@ -103,7 +104,7 @@ fn benchmark_serialization(c: &mut Criterion) {
 
 fn benchmark_optimized_wildcard(c: &mut Criterion) {
     use wminspect::core::wildcard::OptimizedWildcardMatcher;
-    
+
     let patterns = vec![
         ("test*", "test123"),
         ("*test*", "this is a test string"),
@@ -119,43 +120,42 @@ fn benchmark_optimized_wildcard(c: &mut Criterion) {
             }
         })
     });
-    
+
     // Test batch matching
     let batch_patterns = vec!["test*", "*example*", "exact", "complex*pattern*"];
     c.bench_function("optimized_batch_match", |b| {
         b.iter(|| {
-            OptimizedWildcardMatcher::batch_match(black_box(&batch_patterns), black_box("test_example_text"));
+            OptimizedWildcardMatcher::batch_match(
+                black_box(&batch_patterns),
+                black_box("test_example_text"),
+            );
         })
     });
 }
 
 fn benchmark_stack_diff(c: &mut Criterion) {
     use wminspect::core::stack_diff::CachedStackDiff;
-    
+
     let mut diff_calc = CachedStackDiff::new();
     let initial_stack = vec![1, 2, 3, 4, 5];
     let _ = diff_calc.compute_diff(&initial_stack);
-    
+
     c.bench_function("stack_diff_no_change", |b| {
-        b.iter(|| {
-            diff_calc.compute_diff(black_box(&initial_stack))
-        })
+        b.iter(|| diff_calc.compute_diff(black_box(&initial_stack)))
     });
-    
+
     let modified_stack = vec![1, 3, 5, 6, 7];
     c.bench_function("stack_diff_with_changes", |b| {
-        b.iter(|| {
-            diff_calc.compute_diff(black_box(&modified_stack))
-        })
+        b.iter(|| diff_calc.compute_diff(black_box(&modified_stack)))
     });
 }
 
 fn benchmark_colorized_output(c: &mut Criterion) {
     use wminspect::core::colorized_output::{ColorizedFormatter, OutputMode};
-    
+
     let formatter = ColorizedFormatter::with_mode(OutputMode::Colorized);
     let no_color_formatter = ColorizedFormatter::with_mode(OutputMode::NoColor);
-    
+
     c.bench_function("colorized_format_window_entry", |b| {
         b.iter(|| {
             formatter.format_window_entry(
@@ -164,11 +164,11 @@ fn benchmark_colorized_output(c: &mut Criterion) {
                 black_box("test-window"),
                 black_box("100x200+50+75"),
                 black_box("OR Viewable"),
-                black_box(false)
+                black_box(false),
             )
         })
     });
-    
+
     c.bench_function("no_color_format_window_entry", |b| {
         b.iter(|| {
             no_color_formatter.format_window_entry(
@@ -177,7 +177,7 @@ fn benchmark_colorized_output(c: &mut Criterion) {
                 black_box("test-window"),
                 black_box("100x200+50+75"),
                 black_box("OR Viewable"),
-                black_box(false)
+                black_box(false),
             )
         })
     });

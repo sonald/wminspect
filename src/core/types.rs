@@ -1,6 +1,6 @@
-use std::fmt::{self, Debug, Display, Formatter, LowerHex, Write};
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use serde::{Serialize, Deserialize};
+use std::fmt::{self, Debug, Display, Formatter, LowerHex, Write};
 
 /// Helper type to format vec of window IDs in hex
 pub struct HexedVec<'a, T: 'a>(&'a Vec<T>);
@@ -16,7 +16,7 @@ impl<'a, T: Debug + LowerHex> Debug for HexedVec<'a, T> {
             has_next = true;
         }
         write!(&mut s, "]")?;
-        
+
         write!(f, "{}", s)
     }
 }
@@ -61,11 +61,15 @@ impl PartialEq for MapState {
 
 impl Display for MapState {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", match *self {
-            MapState::Unmapped => "Unmapped",
-            MapState::Unviewable => "Unviewable",
-            MapState::Viewable => "Viewable"
-        })
+        write!(
+            f,
+            "{}",
+            match *self {
+                MapState::Unmapped => "Unmapped",
+                MapState::Unviewable => "Unviewable",
+                MapState::Viewable => "Viewable",
+            }
+        )
     }
 }
 
@@ -77,9 +81,12 @@ pub struct Attributes {
 
 impl Display for Attributes {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}{}", 
-               if self.override_redirect { "OR " } else { "" }, 
-               self.map_state)
+        write!(
+            f,
+            "{}{}",
+            if self.override_redirect { "OR " } else { "" },
+            self.map_state
+        )
     }
 }
 
@@ -150,7 +157,7 @@ impl Debug for Message {
             #[cfg(feature = "x11")]
             LastConfigureEvent(raw) => {
                 write!(f, "Message::LastConfigureEvent({})", raw)
-            },
+            }
             Reset => write!(f, "Message::Reset"),
             Quit => write!(f, "Message::Quit"),
         }

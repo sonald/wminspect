@@ -1,4 +1,6 @@
-use wminspect::dsl::filter::{FilterItem, parse_rule, scan_tokens};
+use wminspect::dsl::filter::{
+    FilterItem, parse_rule, parse_rule_text_with_diagnostics, scan_tokens,
+};
 
 #[test]
 fn test_parser_basic() {
@@ -74,11 +76,41 @@ fn test_parser_not_rule() {
         }
         _ => panic!("Expected Not rule"),
     }
+}
 
-    #[test]
-    fn test_parser_not_rule_multiple_conditions() {
-        let mut tokens = scan_tokens("not(name = test, id = 1)");
-        let parsed = parse_rule(&mut tokens);
-        assert!(parsed.is_none());
-    }
+#[test]
+fn test_parser_not_rule_multiple_conditions() {
+    let mut tokens = scan_tokens("not(name = test, id = 1)");
+    let parsed = parse_rule(&mut tokens);
+    assert!(parsed.is_none());
+}
+
+#[test]
+fn test_parser_diagnostics_invalid_geometry_key() {
+    let errors = parse_rule_text_with_diagnostics("geom.depth = 10").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|err| err.contains("wrong geometry token"))
+    );
+}
+
+#[test]
+fn test_parser_diagnostics_invalid_map_state() {
+    let errors = parse_rule_text_with_diagnostics("attrs.map_state = broken").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|err| err.contains("invalid map_state value"))
+    );
+}
+
+#[test]
+fn test_parser_diagnostics_invalid_not_arity() {
+    let errors = parse_rule_text_with_diagnostics("not(name = test, id = 1)").unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|err| err.contains("not rule accepts only one condition"))
+    );
 }

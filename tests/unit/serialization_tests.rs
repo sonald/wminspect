@@ -1,7 +1,7 @@
-use wminspect::dsl::filter::{FilterItem, FilterRule, Action, Predicate, Op, Matcher};
-use wminspect::core::types::MapState;
-use serde_json;
 use bincode;
+use serde_json;
+use wminspect::core::types::MapState;
+use wminspect::dsl::filter::{Action, FilterItem, FilterRule, Matcher, Op, Predicate};
 
 #[cfg(test)]
 mod serialization_round_trip_tests {
@@ -13,7 +13,7 @@ mod serialization_round_trip_tests {
             action: Action::Pin,
             rule: FilterRule::ClientsOnly,
         };
-        
+
         let json = serde_json::to_string(&item).unwrap();
         let deserialized: FilterItem = serde_json::from_str(&json).unwrap();
         assert_eq!(item, deserialized);
@@ -29,7 +29,7 @@ mod serialization_round_trip_tests {
                 matcher: Matcher::Wildcard("test*".to_string()),
             },
         };
-        
+
         let encoded = bincode::serialize(&item).unwrap();
         let decoded: FilterItem = bincode::deserialize(&encoded).unwrap();
         assert_eq!(item, decoded);
@@ -49,17 +49,17 @@ mod serialization_round_trip_tests {
                 matcher: Matcher::MapStateValue(MapState::Viewable),
             }),
         ]);
-        
+
         let item = FilterItem {
             action: Action::Pin,
             rule: complex_rule,
         };
-        
+
         // Test JSON
         let json = serde_json::to_string(&item).unwrap();
         let json_decoded: FilterItem = serde_json::from_str(&json).unwrap();
         assert_eq!(item, json_decoded);
-        
+
         // Test bincode
         let encoded = bincode::serialize(&item).unwrap();
         let bin_decoded: FilterItem = bincode::deserialize(&encoded).unwrap();
@@ -83,17 +83,17 @@ mod serialization_round_trip_tests {
                 }),
             ])),
         ]);
-        
+
         let item = FilterItem {
             action: Action::FilterOut,
             rule: nested_rule,
         };
-        
+
         // Test JSON
         let json = serde_json::to_string(&item).unwrap();
         let json_decoded: FilterItem = serde_json::from_str(&json).unwrap();
         assert_eq!(item, json_decoded);
-        
+
         // Test bincode
         let encoded = bincode::serialize(&item).unwrap();
         let bin_decoded: FilterItem = bincode::deserialize(&encoded).unwrap();
@@ -106,7 +106,7 @@ mod serialization_round_trip_tests {
         let pin_json = serde_json::to_string(&Action::Pin).unwrap();
         let pin_decoded: Action = serde_json::from_str(&pin_json).unwrap();
         assert_eq!(Action::Pin, pin_decoded);
-        
+
         // Test FilterOut action
         let filter_json = serde_json::to_string(&Action::FilterOut).unwrap();
         let filter_decoded: Action = serde_json::from_str(&filter_json).unwrap();
@@ -119,7 +119,7 @@ mod serialization_round_trip_tests {
             let json = serde_json::to_string(state).unwrap();
             let decoded: MapState = serde_json::from_str(&json).unwrap();
             assert_eq!(*state, decoded);
-            
+
             let encoded = bincode::serialize(state).unwrap();
             let bin_decoded: MapState = bincode::deserialize(&encoded).unwrap();
             assert_eq!(*state, bin_decoded);

@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex, RwLock};
-use std::collections::HashMap;
 use crate::core::types::*;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
 // use crate::core::error::WmError; // TODO: Remove if not needed
 use crate::core::stack_diff::CachedStackDiff;
 use crate::dsl::Filter;
@@ -155,9 +155,9 @@ impl GlobalState {
 
     /// Check if a specific option is enabled
     pub fn has_option(&self, condition: &Condition) -> bool {
-        self.read_options().iter().any(|c| {
-            std::mem::discriminant(c) == std::mem::discriminant(condition)
-        })
+        self.read_options()
+            .iter()
+            .any(|c| std::mem::discriminant(c) == std::mem::discriminant(condition))
     }
 
     /// Add an option to the configuration

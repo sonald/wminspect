@@ -374,15 +374,13 @@ impl FilterRule {
             },
 
             // Handle Id with IntegralValue matcher
-            (&Predicate::Id, op, &Matcher::IntegralValue(i)) => {
-                match *op {
-                    Op::Eq => Box::new(move |ref w| w.id == (i as u32)),
-                    Op::Neq => Box::new(move |ref w| w.id != (i as u32)),
-                    Op::GT => Box::new(move |ref w| w.id > (i as u32)),
-                    Op::LT => Box::new(move |ref w| w.id < (i as u32)),
-                    Op::GE => Box::new(move |ref w| w.id >= (i as u32)),
-                    Op::LE => Box::new(move |ref w| w.id <= (i as u32)),
-                }
+            (&Predicate::Id, op, &Matcher::IntegralValue(i)) => match *op {
+                Op::Eq => Box::new(move |ref w| w.id == (i as u32)),
+                Op::Neq => Box::new(move |ref w| w.id != (i as u32)),
+                Op::GT => Box::new(move |ref w| w.id > (i as u32)),
+                Op::LT => Box::new(move |ref w| w.id < (i as u32)),
+                Op::GE => Box::new(move |ref w| w.id >= (i as u32)),
+                Op::LE => Box::new(move |ref w| w.id <= (i as u32)),
             },
 
             // Handle Name with IntegralValue matcher (convert to string comparison)
@@ -393,7 +391,7 @@ impl FilterRule {
                     Op::Neq => Box::new(move |ref w| w.name != s),
                     _ => Box::new(|_w| false), // Other ops don't make sense for names
                 }
-            },
+            }
 
             // Handle Geom with Wildcard matcher (convert to string comparison)
             (&Predicate::Geom(ref g), op, &Matcher::Wildcard(ref pat)) => {
@@ -422,11 +420,16 @@ impl FilterRule {
                     }),
                     _ => Box::new(|_w| false), // Other ops with wildcards don't make sense
                 }
-            },
+            }
 
             // Fallback case - log the unimplemented combination
             (pred, op, matcher) => {
-                wm_error!("Unimplemented predicate/op/matcher combination: {:?}/{:?}/{:?}", pred, op, matcher);
+                wm_error!(
+                    "Unimplemented predicate/op/matcher combination: {:?}/{:?}/{:?}",
+                    pred,
+                    op,
+                    matcher
+                );
                 Box::new(|_w| false)
             }
         }
@@ -452,166 +455,352 @@ pub enum Token {
 
 use std::collections::VecDeque;
 pub(crate) type Tokens = VecDeque<Token>;
+pub type ParseDiagnostics = Vec<String>;
 
-/// parse `Tokens` into FilterItem list
-pub fn parse_rule(tokens: &mut Tokens) -> Option<Vec<FilterItem>> {
-    use self::Token::*;
-
-    let mut items = Vec::new();
-    while let Some(item) = parse_item(tokens) {
-        items.push(item);
-        let tk = tokens.pop_front().unwrap();
-        if tk == EOT {
-            break;
-        }
-    }
-
-    Some(items)
+fn push_diag<S: Into<String>>(diagnostics: &mut ParseDiagnostics, message: S) {
+    diagnostics.push(message.into());
 }
 
-fn parse_item(tokens: &mut Tokens) -> Option<FilterItem> {
-    use self::Token::*;
-
-    let mut action = Action::FilterOut;
-
-    if tokens[0] == EOT {
-        return None;
-    }
-
-    match parse_cond(tokens) {
-        Some(cond) => {
-            if tokens[0] == COLON {
-                tokens.pop_front();
-                match tokens.pop_front().unwrap() {
-                    ACTION(act) => action = act,
-                    _ => {
-                        wm_error!("ignore wrong action");
-                    }
-                }
-            }
-
-            Some(FilterItem {
-                action,
-                rule: cond,
-            })
+fn pop_token(
+    tokens: &mut Tokens,
+    diagnostics: &mut ParseDiagnostics,
+    expected: &str,
+) -> Option<Token> {
+    match tokens.pop_front() {
+        Some(token) => Some(token),
+        None => {
+            push_diag(
+                diagnostics,
+                format!("expected {expected}, found end of input"),
+            );
+            None
         }
+    }
+}
+
+fn peek_token(tokens: &Tokens) -> Option<&Token> {
+    tokens.front()
+}
+
+fn expect_token(tokens: &mut Tokens, expected: Token, diagnostics: &mut ParseDiagnostics) -> bool {
+    match tokens.front() {
+        Some(token) if *token == expected => {
+            tokens.pop_front();
+            true
+        }
+        Some(token) => {
+            push_diag(
+                diagnostics,
+                format!("expected {:?}, found {:?}", expected, token),
+            );
+            false
+        }
+        None => {
+            push_diag(
+                diagnostics,
+                format!("expected {:?}, found end of input", expected),
+            );
+            false
+        }
+    }
+}
+
+fn parse_bool_value(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
         _ => None,
     }
 }
 
-macro_rules! match_tok {
-    ($tokens:tt, $kd:expr) => {{
-        if $tokens[0] == $kd {
-            $tokens.pop_front().unwrap();
-        } else {
-            panic!("expecting {:?} but {:?}", $kd, $tokens[0]);
-        }
-    }};
+fn parse_map_state_value(value: &str) -> Option<MapState> {
+    match value.to_ascii_lowercase().as_str() {
+        "viewable" => Some(MapState::Viewable),
+        "unmapped" => Some(MapState::Unmapped),
+        "unviewable" => Some(MapState::Unviewable),
+        _ => None,
+    }
 }
 
-fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
+fn parse_matcher(
+    pred: &Predicate,
+    raw_value: &str,
+    diagnostics: &mut ParseDiagnostics,
+) -> Option<Matcher> {
+    match pred {
+        Predicate::Id => Some(Matcher::Wildcard(raw_value.to_string())),
+        Predicate::Name => Some(Matcher::Wildcard(raw_value.to_string())),
+        Predicate::Attr(attr) if attr == "override_redirect" => parse_bool_value(raw_value)
+            .map(Matcher::BoolValue)
+            .or_else(|| {
+                push_diag(
+                    diagnostics,
+                    format!(
+                        "invalid override_redirect value {:?}; expected true, false, 1, or 0",
+                        raw_value
+                    ),
+                );
+                None
+            }),
+        Predicate::Attr(attr) if attr == "map_state" => parse_map_state_value(raw_value)
+            .map(Matcher::MapStateValue)
+            .or_else(|| {
+                push_diag(
+                    diagnostics,
+                    format!(
+                        "invalid map_state value {:?}; expected viewable, unmapped, or unviewable",
+                        raw_value
+                    ),
+                );
+                None
+            }),
+        Predicate::Attr(attr) => {
+            push_diag(
+                diagnostics,
+                format!("unsupported attribute predicate {:?}", attr),
+            );
+            None
+        }
+        Predicate::Geom(_) => raw_value
+            .parse::<i16>()
+            .map(Matcher::IntegralValue)
+            .ok()
+            .or_else(|| {
+                push_diag(
+                    diagnostics,
+                    format!("invalid geometry value {:?}; expected integer", raw_value),
+                );
+                None
+            }),
+    }
+}
+
+/// parse `Tokens` into FilterItem list
+pub fn parse_rule(tokens: &mut Tokens) -> Option<Vec<FilterItem>> {
+    match parse_rule_with_diagnostics(tokens) {
+        Ok(items) => Some(items),
+        Err(errors) => {
+            for error in errors {
+                wm_error!("{}", error);
+            }
+            None
+        }
+    }
+}
+
+pub fn parse_rule_with_diagnostics(
+    tokens: &mut Tokens,
+) -> Result<Vec<FilterItem>, ParseDiagnostics> {
     use self::Token::*;
 
-    let tk = tokens.pop_front().unwrap();
-    match tk {
-        StrLit(ref s) => {
-            let pred = match s.as_str() {
-                "attrs" => {
-                    match_tok!(tokens, DOT);
-                    let tk = tokens.pop_front().unwrap();
-                    if let StrLit(name) = tk {
-                        if name == "map_state" || name == "override_redirect" {
-                            Predicate::Attr(name)
-                        } else {
-                            wm_error!("wrong attr token: {:?}", name);
-                            return None;
-                        }
-                    } else {
-                        wm_error!("wrong token: {:?}", tk);
-                        return None;
-                    }
-                }
-                "geom" => {
-                    match_tok!(tokens, DOT);
-                    let tk = tokens.pop_front().unwrap();
-                    if let StrLit(name) = tk {
-                        if name == "x" || name == "y" || name == "width" || name == "height" {
-                            Predicate::Geom(name)
-                        } else {
-                            wm_error!("wrong geometry token: {:?}", name);
-                            return None;
-                        }
-                    } else {
-                        wm_error!("wrong token: {:?}", tk);
-                        return None;
-                    }
-                }
+    let mut diagnostics = Vec::new();
+    let mut items = Vec::new();
 
-                "id" | "name" => {
-                    if s == "id" {
-                        Predicate::Id
-                    } else {
-                        Predicate::Name
-                    }
-                }
+    loop {
+        match peek_token(tokens) {
+            Some(EOT) => {
+                tokens.pop_front();
+                break;
+            }
+            None => break,
+            _ => {}
+        }
 
-                "clients" => {
-                    return Some(FilterRule::ClientsOnly);
-                }
+        let Some(item) = parse_item(tokens, &mut diagnostics) else {
+            return Err(diagnostics);
+        };
+        items.push(item);
 
-                _ => {
-                    wm_error!("wrong token: {:?}", s);
-                    return None;
-                }
-            };
+        match peek_token(tokens) {
+            Some(SEMICOLON) | Some(COMMA) => {
+                tokens.pop_front();
+            }
+            Some(EOT) => {
+                tokens.pop_front();
+                break;
+            }
+            Some(token) => {
+                push_diag(
+                    &mut diagnostics,
+                    format!("expected rule separator or end of input, found {:?}", token),
+                );
+                return Err(diagnostics);
+            }
+            None => break,
+        }
+    }
 
-            if tokens.len() < 2 {
-                wm_error!("incomplete rule");
+    Ok(items)
+}
+
+pub fn parse_rule_text_with_diagnostics<S: AsRef<str>>(
+    rule: S,
+) -> Result<Vec<FilterItem>, ParseDiagnostics> {
+    let mut tokens = scan_tokens(rule);
+    parse_rule_with_diagnostics(&mut tokens)
+}
+
+fn parse_item(tokens: &mut Tokens, diagnostics: &mut ParseDiagnostics) -> Option<FilterItem> {
+    use self::Token::*;
+
+    let mut action = Action::FilterOut;
+
+    if matches!(peek_token(tokens), Some(EOT) | None) {
+        return None;
+    }
+
+    let cond = parse_cond(tokens, diagnostics)?;
+
+    if matches!(peek_token(tokens), Some(COLON)) {
+        tokens.pop_front();
+        match pop_token(tokens, diagnostics, "action")? {
+            ACTION(act) => action = act,
+            token => {
+                push_diag(
+                    diagnostics,
+                    format!("expected action after ':', found {:?}", token),
+                );
                 return None;
             }
-            match (tokens.pop_front().unwrap(), tokens.pop_front().unwrap()) {
-                (OP(ref op), StrLit(ref s)) => {
-                    let matcher = match pred {
-                        Predicate::Id => Matcher::Wildcard(s.clone()),
-                        Predicate::Name => Matcher::Wildcard(s.clone()),
-                        Predicate::Attr(ref a) if a == "override_redirect" => {
-                            Matcher::BoolValue(!matches!(s.to_lowercase().as_str(), "0" | "false"))
-                        }
-                        Predicate::Attr(ref a) if a == "map_state" => {
-                            Matcher::MapStateValue(match s.to_lowercase().as_str() {
-                                "viewable" => MapState::Viewable,
-                                "unmapped" => MapState::Unmapped,
-                                "unviewable" => MapState::Unviewable,
-                                _ => panic!("bad map state value"),
-                            })
-                        }
-                        Predicate::Attr(_) => panic!("bad attr name"),
-                        Predicate::Geom(_) => Matcher::IntegralValue(s.parse::<i16>().unwrap_or(0)),
-                    };
+        }
+    }
 
-                    Some(FilterRule::Single {
-                        pred,
-                        op: op.clone(),
-                        matcher,
-                    })
+    Some(FilterItem { action, rule: cond })
+}
+
+fn parse_predicate(
+    first: String,
+    tokens: &mut Tokens,
+    diagnostics: &mut ParseDiagnostics,
+) -> Option<Predicate> {
+    use self::Token::*;
+
+    match first.as_str() {
+        "attrs" => {
+            if !expect_token(tokens, DOT, diagnostics) {
+                return None;
+            }
+            match pop_token(tokens, diagnostics, "attribute name")? {
+                StrLit(name) if name == "map_state" || name == "override_redirect" => {
+                    Some(Predicate::Attr(name))
                 }
-
-                _ => {
-                    wm_error!("wrong rule");
+                StrLit(name) => {
+                    push_diag(diagnostics, format!("wrong attr token: {:?}", name));
+                    None
+                }
+                token => {
+                    push_diag(diagnostics, format!("wrong token: {:?}", token));
                     None
                 }
             }
         }
+        "geom" => {
+            if !expect_token(tokens, DOT, diagnostics) {
+                return None;
+            }
+            match pop_token(tokens, diagnostics, "geometry field")? {
+                StrLit(name)
+                    if name == "x" || name == "y" || name == "width" || name == "height" =>
+                {
+                    Some(Predicate::Geom(name))
+                }
+                StrLit(name) => {
+                    push_diag(diagnostics, format!("wrong geometry token: {:?}", name));
+                    None
+                }
+                token => {
+                    push_diag(diagnostics, format!("wrong token: {:?}", token));
+                    None
+                }
+            }
+        }
+        "id" => Some(Predicate::Id),
+        "name" => Some(Predicate::Name),
+        other => {
+            push_diag(diagnostics, format!("wrong token: {:?}", other));
+            None
+        }
+    }
+}
+
+fn parse_cond(tokens: &mut Tokens, diagnostics: &mut ParseDiagnostics) -> Option<FilterRule> {
+    use self::Token::*;
+
+    let tk = pop_token(tokens, diagnostics, "condition")?;
+    match tk {
+        StrLit(s) => {
+            if s == "clients" {
+                return Some(FilterRule::ClientsOnly);
+            }
+
+            let pred = parse_predicate(s, tokens, diagnostics)?;
+            let op = match pop_token(tokens, diagnostics, "operator")? {
+                OP(op) => op,
+                token => {
+                    push_diag(
+                        diagnostics,
+                        format!("wrong rule: expected operator, found {:?}", token),
+                    );
+                    return None;
+                }
+            };
+
+            let raw_value = match pop_token(tokens, diagnostics, "value")? {
+                StrLit(value) => value,
+                token => {
+                    push_diag(
+                        diagnostics,
+                        format!("wrong rule: expected value, found {:?}", token),
+                    );
+                    return None;
+                }
+            };
+
+            let matcher = parse_matcher(&pred, &raw_value, diagnostics)?;
+            Some(FilterRule::Single { pred, op, matcher })
+        }
 
         ANY | ALL => {
-            match_tok!(tokens, LBRACE);
+            if !expect_token(tokens, LBRACE, diagnostics) {
+                return None;
+            }
+
             let mut rules = Vec::new();
-            while let Some(cond) = parse_cond(tokens) {
+            loop {
+                if matches!(peek_token(tokens), Some(RBRACE) | Some(EOT) | None) && rules.is_empty()
+                {
+                    push_diag(diagnostics, "expected condition inside logical group");
+                    return None;
+                }
+
+                let Some(cond) = parse_cond(tokens, diagnostics) else {
+                    return None;
+                };
                 rules.push(Box::new(cond));
-                // pop ',' or ')' anyway
-                let tk = tokens.pop_front().unwrap();
-                if tk == RBRACE {
-                    break;
+
+                match peek_token(tokens) {
+                    Some(COMMA) => {
+                        tokens.pop_front();
+                        if matches!(peek_token(tokens), Some(RBRACE)) {
+                            push_diag(diagnostics, "expected condition after ','");
+                            return None;
+                        }
+                    }
+                    Some(RBRACE) => {
+                        tokens.pop_front();
+                        break;
+                    }
+                    Some(token) => {
+                        push_diag(
+                            diagnostics,
+                            format!("expected ',' or ')', found {:?}", token),
+                        );
+                        return None;
+                    }
+                    None => {
+                        push_diag(diagnostics, "expected ')' to close logical group");
+                        return None;
+                    }
                 }
             }
 
@@ -623,20 +812,28 @@ fn parse_cond(tokens: &mut Tokens) -> Option<FilterRule> {
         }
 
         NOT => {
-            match_tok!(tokens, LBRACE);
-            if let Some(cond) = parse_cond(tokens) {
-                if let Some(RBRACE) = tokens.pop_front() {
-                    Some(FilterRule::Not(Box::new(cond)))
-                } else {
-                    wm_error!("not rule accepts only one condition");
+            if !expect_token(tokens, LBRACE, diagnostics) {
+                return None;
+            }
+
+            let cond = parse_cond(tokens, diagnostics)?;
+            match pop_token(tokens, diagnostics, "')'")? {
+                RBRACE => Some(FilterRule::Not(Box::new(cond))),
+                COMMA => {
+                    push_diag(diagnostics, "not rule accepts only one condition");
                     None
                 }
-            } else {
-                None
+                token => {
+                    push_diag(
+                        diagnostics,
+                        format!("expected ')' after not(...) condition, found {:?}", token),
+                    );
+                    None
+                }
             }
         }
         _ => {
-            wm_error!("wrong match: [{:?}]", tk);
+            push_diag(diagnostics, format!("wrong match: [{:?}]", tk));
             None
         }
     }
@@ -660,7 +857,6 @@ pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
     let mut need_act = false;
 
     while let Some(ch) = chars.next() {
-
         match ch {
             '=' => {
                 append_tok!(tokens, OP(Op::Eq));
@@ -728,10 +924,12 @@ pub fn scan_tokens<S: AsRef<str>>(rule: S) -> Tokens {
                 loop {
                     match chars.peek() {
                         Some('\n') | None => break,
-                        _ => { chars.next(); }
+                        _ => {
+                            chars.next();
+                        }
                     }
                 }
-            },
+            }
 
             _ => {
                 // scan string literal

@@ -259,6 +259,9 @@ wminspect sheet --compile complex.rule output.json 2>errors.log
 ### Rule Loading
 
 ```bash
+# Load a built-in preset by name
+wminspect --preset clean-monitor
+
 # Load plain text rules
 wminspect sheet --load rules.rule
 
@@ -272,18 +275,39 @@ wminspect sheet --load compiled.bin
 wminspect sheet --load rules.rule monitor
 ```
 
+### Built-in Presets
+
+```bash
+# List built-in troubleshooting presets
+wminspect sheet builtin list
+
+# Show the raw .rule text for one built-in preset
+wminspect sheet builtin show clean-monitor
+
+# Start from a preset and further narrow it with an ad-hoc filter
+wminspect --preset mapped-clients --filter "geom.width>=400"
+
+# The same presets are also tracked as editable files in ./sheets
+wminspect sheet --load ./sheets/special-windows.rule
+```
+
 ### Rule Validation
 
 ```bash
-# Show grammar for validation
-wminspect --show-grammar
+# Verify a single sheet file
+wminspect sheet verify test.rule
 
-# Test rule syntax (compile without output)
-wminspect sheet --compile test.rule /dev/null
+# Verify all supported sheets under a directory recursively
+wminspect sheet verify ./rules
 
-# Validate and apply inline
-wminspect -f "name=*test*" --monitor
+# Show detailed plain-text diagnostics
+wminspect sheet verify complex.rule --detail
+
+# Emit a detailed JSON report
+wminspect sheet verify ./rules --json
 ```
+
+`sheet verify` supports `.rule`, `.json`, and `.bin` sheets. It exits with `0` only when every discovered supported sheet is valid. It exits with `1` if any sheet is invalid, the path is missing, a direct file target has an unsupported extension, or a directory contains no supported sheet files.
 
 ## Advanced Features
 

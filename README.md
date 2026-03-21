@@ -95,12 +95,29 @@ wminspect --show-grammar
 # Load rules from a file
 wminspect sheet --load rules.rule
 
+# Load a built-in troubleshooting preset
+wminspect --preset clean-monitor
+
+# List built-in presets
+wminspect sheet builtin list
+
 # Compile rules to JSON format
 wminspect sheet --compile rules.rule compiled.json
 
 # Compile rules to binary format
 wminspect sheet --compile rules.rule compiled.bin
+
+# Verify one sheet file
+wminspect sheet verify rules.rule
+
+# Verify all supported sheets under a directory
+wminspect sheet verify ./sheets
+
+# Emit a detailed JSON verification report
+wminspect sheet verify ./sheets --json
 ```
+
+Built-in presets are also stored as editable `.rule` files under [`sheets/`](sheets).
 
 ## Advanced Examples
 
@@ -161,7 +178,39 @@ wminspect sheet --compile monitoring.rule rules.bin
 # Load compiled rules
 wminspect sheet --load rules.json
 wminspect sheet --load rules.bin
+
+# Verify compiled or source sheets
+wminspect sheet verify monitoring.rule --detail
+wminspect sheet verify .
 ```
+
+### Built-in Troubleshooting Presets
+
+```bash
+# Load a built-in preset directly
+wminspect --preset mapped-clients
+
+# Refine a built-in preset with an extra ad-hoc filter
+wminspect --preset mapped-clients --filter "geom.width>=400"
+
+# List built-in presets
+wminspect sheet builtin list
+
+# Print one preset as raw .rule text
+wminspect sheet builtin show clean-monitor
+
+# Load the same preset through the tracked file in sheets/
+wminspect sheet --load ./sheets/clean-monitor.rule
+```
+
+### Sheet Verification
+
+`wminspect sheet verify <path>` validates either a single `.rule`, `.json`, or `.bin` file or every supported sheet below a directory recursively.
+
+- Default output is a short summary plus one line per invalid file.
+- `--detail` prints expanded plain-text diagnostics for each verified file.
+- `--json` emits a machine-readable detailed report to stdout.
+- Exit code is `0` only when every discovered supported sheet is valid. Missing paths, unsupported direct file targets, empty directories with no supported sheets, or any invalid sheet return `1`.
 
 ## Architecture Overview
 
@@ -248,4 +297,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Support for Wayland compositors
 - Event timestamp tracking
 - Rule databases with version control
-

@@ -6,10 +6,22 @@ wminspect \- X11 window manager inspector and monitor
 [\fIOPTIONS\fR]
 .br
 .B wminspect
+[\fIOPTIONS\fR] [\fB\-\-preset\fR \fINAME\fR]
+.br
+.B wminspect
 \fBmonitor\fR
 .br
 .B wminspect
 \fBsheet\fR [\fB\-\-load\fR \fIPATH\fR | \fB\-\-compile\fR \fIINPUT\fR \fIOUTPUT\fR]
+.br
+.B wminspect
+\fBsheet verify\fR \fIPATH\fR [\fB\-\-detail\fR | \fB\-\-json\fR]
+.br
+.B wminspect
+\fBsheet builtin list\fR
+.br
+.B wminspect
+\fBsheet builtin show\fR \fINAME\fR
 .SH DESCRIPTION
 .B wminspect
 is a comprehensive tool for inspecting X11 window manager state and monitoring window events in real-time. It provides detailed information about windows, their properties, geometry, and attributes, with support for filtering and customizable output formats.
@@ -34,6 +46,9 @@ Run in monitor mode to watch for window events in real-time. Shows changes as th
 .TP
 \fB\-f\fR, \fB\-\-filter\fR \fIRULE\fR
 Apply filtering rules to the window collection. Use \fB\-\-show\-grammar\fR to see rule syntax.
+.TP
+\fB\-\-preset\fR \fINAME\fR
+Load a built-in troubleshooting preset before applying any additional \fB\-\-filter\fR expression.
 .TP
 \fB\-o\fR, \fB\-\-omit\-hidden\fR
 Omit hidden or iconified windows from the output.
@@ -69,6 +84,23 @@ Load filter rules from a sheet file. Supports .json, .bin, and .rule formats.
 .TP
 \fB\-\-compile\fR \fIINPUT\fR \fIOUTPUT\fR
 Compile a human-readable .rule file into binary (.bin) or JSON (.json) format for faster loading.
+.TP
+\fBverify\fR \fIPATH\fR [\fB\-\-detail\fR | \fB\-\-json\fR]
+Verify one supported sheet file or all supported sheets under a directory recursively.
+.RS
+.TP
+\fB\-\-detail\fR
+Show detailed plain-text diagnostics for each verified file.
+.TP
+\fB\-\-json\fR
+Emit a detailed JSON verification report to standard output.
+.RE
+.TP
+\fBbuiltin list\fR
+List the available built-in troubleshooting presets.
+.TP
+\fBbuiltin show\fR \fINAME\fR
+Print the raw .rule text for a built-in preset.
 .RE
 .SH FILTER RULES
 Filter rules allow you to select specific windows based on their properties. The rule syntax supports:
@@ -149,6 +181,21 @@ Pin windows matching a pattern:
 Load filter rules from a sheet:
 .RS
 .B wminspect sheet \-\-load rules.json
+.RE
+.PP
+Load a built-in preset:
+.RS
+.B wminspect \-\-preset clean-monitor
+.RE
+.PP
+List built-in presets:
+.RS
+.B wminspect sheet builtin list
+.RE
+.PP
+Print one built-in preset as raw .rule text:
+.RS
+.B wminspect sheet builtin show clean-monitor
 .RE
 .PP
 Compile rules file:

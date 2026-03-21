@@ -50,14 +50,10 @@ impl ColorizedFormatter {
     /// Format a window ID with appropriate coloring
     pub fn format_window_id(&self, id: u32) -> String {
         let id_str = format!("0x{:x}", id);
-        
+
         match self.mode {
-            OutputMode::Colorized if self.is_terminal => {
-                id_str.bright_blue().bold().to_string()
-            }
-            OutputMode::Concise if self.is_terminal => {
-                id_str.blue().to_string()
-            }
+            OutputMode::Colorized if self.is_terminal => id_str.bright_blue().bold().to_string(),
+            OutputMode::Concise if self.is_terminal => id_str.blue().to_string(),
             _ => id_str,
         }
     }
@@ -65,12 +61,8 @@ impl ColorizedFormatter {
     /// Format a window name with appropriate coloring
     pub fn format_window_name(&self, name: &str) -> String {
         match self.mode {
-            OutputMode::Colorized if self.is_terminal => {
-                name.bright_cyan().to_string()
-            }
-            OutputMode::Concise if self.is_terminal => {
-                name.cyan().to_string()
-            }
+            OutputMode::Colorized if self.is_terminal => name.bright_cyan().to_string(),
+            OutputMode::Concise if self.is_terminal => name.cyan().to_string(),
             _ => name.to_string(),
         }
     }
@@ -78,12 +70,8 @@ impl ColorizedFormatter {
     /// Format geometry information with appropriate coloring
     pub fn format_geometry(&self, geom_str: &str) -> String {
         match self.mode {
-            OutputMode::Colorized if self.is_terminal => {
-                geom_str.bright_red().to_string()
-            }
-            OutputMode::Concise if self.is_terminal => {
-                geom_str.red().to_string()
-            }
+            OutputMode::Colorized if self.is_terminal => geom_str.bright_red().to_string(),
+            OutputMode::Concise if self.is_terminal => geom_str.red().to_string(),
             _ => geom_str.to_string(),
         }
     }
@@ -91,12 +79,8 @@ impl ColorizedFormatter {
     /// Format attributes with appropriate coloring
     pub fn format_attributes(&self, attrs_str: &str) -> String {
         match self.mode {
-            OutputMode::Colorized if self.is_terminal => {
-                attrs_str.bright_green().to_string()
-            }
-            OutputMode::Concise if self.is_terminal => {
-                attrs_str.green().to_string()
-            }
+            OutputMode::Colorized if self.is_terminal => attrs_str.bright_green().to_string(),
+            OutputMode::Concise if self.is_terminal => attrs_str.green().to_string(),
             _ => attrs_str.to_string(),
         }
     }
@@ -104,12 +88,8 @@ impl ColorizedFormatter {
     /// Format a line with diff highlighting
     pub fn format_diff_line(&self, line: &str) -> String {
         match self.mode {
-            OutputMode::Colorized if self.is_terminal => {
-                line.on_bright_white().black().to_string()
-            }
-            OutputMode::Concise if self.is_terminal => {
-                line.on_white().black().to_string()
-            }
+            OutputMode::Colorized if self.is_terminal => line.on_bright_white().black().to_string(),
+            OutputMode::Concise if self.is_terminal => line.on_white().black().to_string(),
             _ => format!(">>> {}", line),
         }
     }
@@ -182,32 +162,39 @@ impl ColorizedFormatter {
     /// Format a separator line
     pub fn format_separator(&self) -> String {
         match self.mode {
-            OutputMode::Colorized if self.is_terminal => {
-                "─".repeat(80).bright_black().to_string()
-            }
-            OutputMode::Concise if self.is_terminal => {
-                "─".repeat(40).black().to_string()
-            }
+            OutputMode::Colorized if self.is_terminal => "─".repeat(80).bright_black().to_string(),
+            OutputMode::Concise if self.is_terminal => "─".repeat(40).black().to_string(),
             _ => "-".repeat(40),
         }
     }
 
     /// Format a complete window entry
-    pub fn format_window_entry(&self, index: usize, id: u32, name: &str, geom: &str, attrs: &str, is_diff: bool) -> String {
+    pub fn format_window_entry(
+        &self,
+        index: usize,
+        id: u32,
+        name: &str,
+        geom: &str,
+        attrs: &str,
+        is_diff: bool,
+    ) -> String {
         let id_formatted = self.format_window_id(id);
         let name_formatted = self.format_window_name(name);
         let geom_formatted = self.format_geometry(geom);
         let attrs_formatted = self.format_attributes(attrs);
-        
+
         let line = match self.mode {
             OutputMode::Concise => {
                 format!("{}: {}({})", index, id_formatted, name_formatted)
             }
             _ => {
-                format!("{}: {}({}) {} {}", index, id_formatted, name_formatted, geom_formatted, attrs_formatted)
+                format!(
+                    "{}: {}({}) {} {}",
+                    index, id_formatted, name_formatted, geom_formatted, attrs_formatted
+                )
             }
         };
-        
+
         if is_diff {
             self.format_diff_line(&line)
         } else {
@@ -244,16 +231,18 @@ impl ColorizedFormatter {
     /// Create a styled table header
     pub fn format_table_header(&self, headers: &[&str]) -> String {
         let header_line = headers.join(" | ");
-        
+
         match self.mode {
             OutputMode::Colorized if self.is_terminal => {
-                format!("{}\n{}", 
+                format!(
+                    "{}\n{}",
                     header_line.bright_white().bold().underline(),
                     "─".repeat(header_line.len()).bright_black()
                 )
             }
             OutputMode::Concise if self.is_terminal => {
-                format!("{}\n{}", 
+                format!(
+                    "{}\n{}",
                     header_line.white().bold(),
                     "-".repeat(header_line.len())
                 )
@@ -325,15 +314,15 @@ mod tests {
     #[test]
     fn test_output_modes() {
         let mut formatter = ColorizedFormatter::new();
-        
+
         // Test colorized mode
         formatter.set_mode(OutputMode::Colorized);
         assert_eq!(formatter.get_mode(), OutputMode::Colorized);
-        
+
         // Test concise mode
         formatter.set_mode(OutputMode::Concise);
         assert_eq!(formatter.get_mode(), OutputMode::Concise);
-        
+
         // Test no color mode
         formatter.set_mode(OutputMode::NoColor);
         assert_eq!(formatter.get_mode(), OutputMode::NoColor);
@@ -342,49 +331,55 @@ mod tests {
     #[test]
     fn test_formatting_functions() {
         let formatter = ColorizedFormatter::with_mode(OutputMode::NoColor);
-        
+
         // Test basic formatting functions
         assert_eq!(formatter.format_window_id(0x123), "0x123");
         assert_eq!(formatter.format_window_name("test"), "test");
         assert_eq!(formatter.format_geometry("100x200+50+75"), "100x200+50+75");
         assert_eq!(formatter.format_attributes("OR Viewable"), "OR Viewable");
-        
+
         // Test message formatting
         assert_eq!(formatter.format_error("test error"), "Error: test error");
-        assert_eq!(formatter.format_warning("test warning"), "Warning: test warning");
+        assert_eq!(
+            formatter.format_warning("test warning"),
+            "Warning: test warning"
+        );
         assert_eq!(formatter.format_info("test info"), "Info: test info");
-        assert_eq!(formatter.format_success("test success"), "Success: test success");
+        assert_eq!(
+            formatter.format_success("test success"),
+            "Success: test success"
+        );
     }
 
     #[test]
     fn test_window_entry_formatting() {
         let formatter = ColorizedFormatter::with_mode(OutputMode::NoColor);
-        
+
         let entry = formatter.format_window_entry(
-            0, 
-            0x123, 
-            "test-window", 
-            "100x200+50+75", 
-            "OR Viewable", 
-            false
+            0,
+            0x123,
+            "test-window",
+            "100x200+50+75",
+            "OR Viewable",
+            false,
         );
-        
+
         assert_eq!(entry, "0: 0x123(test-window) 100x200+50+75 OR Viewable");
     }
 
     #[test]
     fn test_concise_formatting() {
         let formatter = ColorizedFormatter::with_mode(OutputMode::Concise);
-        
+
         let entry = formatter.format_window_entry(
-            0, 
-            0x123, 
-            "test-window", 
-            "100x200+50+75", 
-            "OR Viewable", 
-            false
+            0,
+            0x123,
+            "test-window",
+            "100x200+50+75",
+            "OR Viewable",
+            false,
         );
-        
+
         // In concise mode, only id and name should be shown
         assert!(entry.contains("0x123"));
         assert!(entry.contains("test-window"));
@@ -394,15 +389,13 @@ mod tests {
     #[test]
     fn test_diff_formatting() {
         let formatter = ColorizedFormatter::with_mode(OutputMode::NoColor);
-        
-        let normal_entry = formatter.format_window_entry(
-            0, 0x123, "test", "100x200+50+75", "Viewable", false
-        );
-        
-        let diff_entry = formatter.format_window_entry(
-            0, 0x123, "test", "100x200+50+75", "Viewable", true
-        );
-        
+
+        let normal_entry =
+            formatter.format_window_entry(0, 0x123, "test", "100x200+50+75", "Viewable", false);
+
+        let diff_entry =
+            formatter.format_window_entry(0, 0x123, "test", "100x200+50+75", "Viewable", true);
+
         assert_ne!(normal_entry, diff_entry);
         assert!(diff_entry.starts_with(">>>"));
     }
@@ -410,10 +403,10 @@ mod tests {
     #[test]
     fn test_table_formatting() {
         let formatter = ColorizedFormatter::with_mode(OutputMode::NoColor);
-        
+
         let headers = vec!["ID", "Name", "Geometry"];
         let table_header = formatter.format_table_header(&headers);
-        
+
         assert!(table_header.contains("ID | Name | Geometry"));
         assert!(table_header.contains("---"));
     }
@@ -421,10 +414,10 @@ mod tests {
     #[test]
     fn test_text_truncation() {
         let formatter = ColorizedFormatter::with_mode(OutputMode::NoColor);
-        
+
         let long_text = "This is a very long text that should be truncated";
         let truncated = formatter.truncate_to_width(long_text, Some(20));
-        
+
         assert_eq!(truncated.len(), 20);
         assert!(truncated.ends_with("..."));
     }

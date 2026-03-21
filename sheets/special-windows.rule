@@ -1,0 +1,16 @@
+attrs.map_state=Viewable: filter;
+any(
+    attrs.override_redirect=true,
+    geom.width<=120,
+    geom.height<=120,
+    name=*dock*,
+    name=*panel*,
+    name=*toolbar*,
+    name=*desktop*,
+    name=*notification*,
+    name=*launchpad*,
+    name=*clipboard*,
+    name=*dde-shell*,
+    name=xfce4-*,
+    name=gnome-*
+): filter

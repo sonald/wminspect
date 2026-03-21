@@ -1,6 +1,6 @@
+use crate::core::types::{WindowId, WindowStackView};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use crate::core::types::{WindowId, WindowStackView};
 
 /// A cached stack difference calculator to optimize query_tree performance
 #[derive(Debug, Clone)]
@@ -50,7 +50,7 @@ impl CachedStackDiff {
     /// Compute diff between current and previous stack
     pub fn compute_diff(&mut self, current_stack: &WindowStackView) -> StackDiff {
         let current_hash = Self::calculate_stack_hash(current_stack);
-        
+
         // Check if we already have this diff cached
         if let Some(cached_diff) = self.diff_cache.get(&current_hash) {
             return cached_diff.clone();
@@ -102,7 +102,7 @@ impl CachedStackDiff {
                 removed_windows.push((window_id, pos));
             }
         }
-        
+
         // Sort by position to maintain order
         removed_windows.sort_by_key(|&(_, pos)| pos);
         diff.removed = removed_windows.into_iter().map(|(id, _)| id).collect();
@@ -113,14 +113,19 @@ impl CachedStackDiff {
     }
 
     /// Update internal cache with new state
-    fn update_cache(&mut self, current_stack: &WindowStackView, current_hash: u64, diff: StackDiff) {
+    fn update_cache(
+        &mut self,
+        current_stack: &WindowStackView,
+        current_hash: u64,
+        diff: StackDiff,
+    ) {
         self.previous_stack = current_stack
             .iter()
             .enumerate()
             .map(|(pos, &window_id)| (window_id, pos))
             .collect();
         self.previous_hash = current_hash;
-        
+
         // Limit cache size to prevent memory growth
         if self.diff_cache.len() > 100 {
             self.diff_cache.clear();
@@ -150,7 +155,7 @@ mod tests {
         let mut diff_calc = CachedStackDiff::new();
         let stack = vec![1, 2, 3];
         let diff = diff_calc.compute_diff(&stack);
-        
+
         assert_eq!(diff.unchanged, stack);
         assert!(diff.added.is_empty());
         assert!(diff.removed.is_empty());
@@ -162,10 +167,10 @@ mod tests {
         let mut diff_calc = CachedStackDiff::new();
         let initial_stack = vec![1, 2, 3];
         let _ = diff_calc.compute_diff(&initial_stack);
-        
+
         let new_stack = vec![1, 2, 3, 4, 5];
         let diff = diff_calc.compute_diff(&new_stack);
-        
+
         assert_eq!(diff.added, vec![4, 5]);
         assert_eq!(diff.unchanged, vec![1, 2, 3]);
         assert!(diff.removed.is_empty());
@@ -177,10 +182,10 @@ mod tests {
         let mut diff_calc = CachedStackDiff::new();
         let initial_stack = vec![1, 2, 3, 4, 5];
         let _ = diff_calc.compute_diff(&initial_stack);
-        
+
         let new_stack = vec![1, 3, 5];
         let diff = diff_calc.compute_diff(&new_stack);
-        
+
         assert_eq!(diff.removed, vec![2, 4]);
         assert_eq!(diff.unchanged, vec![1]); // Only window 1 stays in same position (0)
         assert!(diff.added.is_empty());
@@ -195,10 +200,10 @@ mod tests {
         let mut diff_calc = CachedStackDiff::new();
         let initial_stack = vec![1, 2, 3, 4];
         let _ = diff_calc.compute_diff(&initial_stack);
-        
+
         let new_stack = vec![4, 2, 1, 3];
         let diff = diff_calc.compute_diff(&new_stack);
-        
+
         assert_eq!(diff.moved.len(), 3);
         assert!(diff.moved.contains(&(4, 3, 0)));
         assert!(diff.moved.contains(&(1, 0, 2)));
@@ -210,13 +215,13 @@ mod tests {
     fn test_cache_hit() {
         let mut diff_calc = CachedStackDiff::new();
         let stack = vec![1, 2, 3];
-        
+
         // First computation
         let diff1 = diff_calc.compute_diff(&stack);
-        
+
         // Second computation with same stack should hit cache
         let diff2 = diff_calc.compute_diff(&stack);
-        
+
         assert_eq!(diff1, diff2);
         assert_eq!(diff_calc.cache_stats().1, 1); // One cached result
     }

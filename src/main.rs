@@ -8,13 +8,18 @@ use crate::core::tracing::init_tracing;
 #[cfg(feature = "gui")]
 mod ui;
 
-#[cfg(any(feature = "x11", feature = "platform-linux", feature = "platform-windows", feature = "platform-macos"))]
+#[cfg(any(
+    feature = "x11",
+    feature = "platform-linux",
+    feature = "platform-windows",
+    feature = "platform-macos"
+))]
 mod platform;
 
 // For compatibility with existing code, we still export a temporary wm module
 pub mod wm {
-    pub use crate::dsl::*;
     pub use crate::core::*;
+    pub use crate::dsl::*;
     #[cfg(feature = "x11")]
     pub use crate::platform::*;
 }
@@ -40,6 +45,8 @@ pub fn main() {
                 .help("Run in monitor mode (watch for window events)").action(clap::ArgAction::SetTrue),
             Arg::new("filter").short('f').long("filter").value_name("RULE")
                 .help("Apply filtering rules to window collection\n(use --show-grammar for rule syntax)"),
+            Arg::new("preset").long("preset").value_name("NAME")
+                .help("Load a built-in troubleshooting preset before applying --filter"),
             Arg::new("omit-hidden").short('o').long("omit-hidden")
                 .help("Omit hidden/iconified windows from output").action(clap::ArgAction::SetTrue),
             Arg::new("no-override-redirect").short('O').long("no-override-redirect")
@@ -72,6 +79,46 @@ pub fn main() {
                         .long_help("Compile a human-readable .rule file into a binary (.bin) or JSON (.json) format\nfor faster loading and processing.")
                         .conflicts_with("load").num_args(2)
                 ])
+                .subcommand(
+                    Command::new("verify")
+                        .about("Verify one sheet file or all supported sheets under a directory")
+                        .arg(
+                            Arg::new("path")
+                                .value_name("PATH")
+                                .required(true)
+                                .help("Sheet file or directory to verify recursively"),
+                        )
+                        .arg(
+                            Arg::new("detail")
+                                .long("detail")
+                                .help("Show detailed plain-text diagnostics")
+                                .action(clap::ArgAction::SetTrue),
+                        )
+                        .arg(
+                            Arg::new("json")
+                                .long("json")
+                                .help("Emit a detailed JSON report")
+                                .conflicts_with("detail")
+                                .action(clap::ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("builtin")
+                        .about("List or show built-in troubleshooting sheet presets")
+                        .subcommand_required(true)
+                        .arg_required_else_help(true)
+                        .subcommand(Command::new("list").about("List available built-in presets"))
+                        .subcommand(
+                            Command::new("show")
+                                .about("Show the raw .rule text for one built-in preset")
+                                .arg(
+                                    Arg::new("name")
+                                        .value_name("NAME")
+                                        .required(true)
+                                        .help("Built-in preset name"),
+                                ),
+                        ),
+                )
         )
         .get_matches();
 
@@ -80,6 +127,85 @@ pub fn main() {
         return;
     }
 
+    let mut f = dsl::Filter::new();
+
+    if let Some(sub) = matches.subcommand_matches("sheet") {
+        if let Some(builtin) = sub.subcommand_matches("builtin") {
+            if builtin.subcommand_matches("list").is_some() {
+                for preset in dsl::builtin_sheet_presets() {
+                    println!("{}\t{}", preset.name, preset.summary);
+                }
+                return;
+            }
+
+            if let Some(show) = builtin.subcommand_matches("show") {
+                let name = show.get_one::<String>("name").unwrap();
+                let Some(preset) = dsl::builtin_sheet_preset(name) else {
+                    eprintln!(
+                        "unknown built-in preset {:?}; available presets: {}",
+                        name,
+                        dsl::builtin_sheet_presets()
+                            .iter()
+                            .map(|preset| preset.name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    std::process::exit(1);
+                };
+                print!("{}", preset.rule_text);
+                return;
+            }
+        }
+
+        if let Some(verify) = sub.subcommand_matches("verify") {
+            let path = verify.get_one::<String>("path").unwrap();
+            let report = dsl::verify_target(path);
+
+            if verify.get_flag("json") {
+                println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            } else if verify.get_flag("detail") {
+                println!("{}", dsl::render_plain_detail(&report));
+            } else {
+                println!("{}", dsl::render_plain_summary(&report));
+            }
+
+            if report.has_failures() {
+                std::process::exit(1);
+            }
+            return;
+        }
+
+        if let Some(vals) = sub.get_many::<String>("compile") {
+            let vals: Vec<&str> = vals.map(|s| s.as_str()).collect();
+            dsl::Filter::compile(vals[0], vals[1]);
+            return;
+        }
+
+        if let Some(val) = sub.get_one::<String>("load") {
+            f.load_sheet(val);
+        }
+    }
+
+    if let Some(name) = matches.get_one::<String>("preset") {
+        let Some(preset) = dsl::builtin_sheet_preset(name) else {
+            eprintln!(
+                "unknown built-in preset {:?}; available presets: {}",
+                name,
+                dsl::builtin_sheet_presets()
+                    .iter()
+                    .map(|preset| preset.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            std::process::exit(1);
+        };
+
+        f.extend_with(preset.rule_text, dsl::SheetFormat::Plain);
+    }
+
+    if let Some(rule) = matches.get_one::<String>("filter") {
+        f.extend_with(rule, dsl::SheetFormat::Plain);
+    }
 
     #[cfg(feature = "x11")]
     let (c, _) = xcb::Connection::connect(None).unwrap();
@@ -89,27 +215,10 @@ pub fn main() {
         std::process::exit(1);
     });
 
-    let mut f = match matches.get_one::<String>("filter") {
-        None => dsl::Filter::new(),
-        Some(rule) => dsl::Filter::parse(rule)
-    };
-
-    if let Some(sub) = matches.subcommand_matches("sheet") {
-        if let Some(vals) = sub.get_many::<String>("compile") {
-            let vals: Vec<&str> = vals.map(|s| s.as_str()).collect();
-            dsl::Filter::compile(vals[0], vals[1]);
-            return;
-        } 
-
-        if let Some(val) = sub.get_one::<String>("load") {
-            f.load_sheet(val);
-        }
-    }
-
     #[cfg(feature = "x11")]
     {
         let mut formatter = core::colorized_output::ColorizedFormatter::new();
-        
+
         // Configure output mode
         if matches.get_flag("no-color") {
             formatter.set_mode(core::colorized_output::OutputMode::NoColor);
@@ -118,18 +227,36 @@ pub fn main() {
         } else if matches.get_flag("colored") {
             formatter.set_mode(core::colorized_output::OutputMode::Colorized);
         }
-        
+
         let mut ctx = wm::Context::new_with_formatter(&ewmh, f, formatter);
-        
-        if matches.get_flag("only-mapped") { ctx.set_mapped_only(); }
-        if matches.get_flag("omit-hidden") { ctx.set_omit_hidden(); }
-        if matches.get_flag("no-special") { ctx.set_no_special(); }
-        if matches.get_flag("no-override-redirect") { ctx.set_no_override_redirect(); }
-        if matches.get_flag("diff") { ctx.set_show_diff(); }
-        if matches.get_flag("clients-only") { ctx.set_clients_only(); }
-        if matches.get_flag("num") { ctx.set_show_sequence_numbers(); }
-        if matches.get_flag("colored") { ctx.set_colorful(); }
-        if matches.get_flag("num") { ctx.set_show_sequence_numbers(); }
+
+        if matches.get_flag("only-mapped") {
+            ctx.set_mapped_only();
+        }
+        if matches.get_flag("omit-hidden") {
+            ctx.set_omit_hidden();
+        }
+        if matches.get_flag("no-special") {
+            ctx.set_no_special();
+        }
+        if matches.get_flag("no-override-redirect") {
+            ctx.set_no_override_redirect();
+        }
+        if matches.get_flag("diff") {
+            ctx.set_show_diff();
+        }
+        if matches.get_flag("clients-only") {
+            ctx.set_clients_only();
+        }
+        if matches.get_flag("num") {
+            ctx.set_show_sequence_numbers();
+        }
+        if matches.get_flag("colored") {
+            ctx.set_colorful();
+        }
+        if matches.get_flag("num") {
+            ctx.set_show_sequence_numbers();
+        }
 
         if matches.get_flag("monitor") || matches.subcommand_matches("monitor").is_some() {
             wm::monitor(&ctx);
@@ -138,7 +265,7 @@ pub fn main() {
             ctx.dump_windows(None);
         }
     }
-    
+
     #[cfg(not(feature = "x11"))]
     {
         // Check if we're running on Wayland
@@ -150,14 +277,16 @@ pub fn main() {
                 std::process::exit(0); // Graceful exit for Wayland
             }
         }
-        
+
         // Check if we're on macOS
         if cfg!(target_os = "macos") {
             println!("Running on macOS - X11 support requires XQuartz.");
-            println!("Please install XQuartz and ensure it's running, then build with --features x11");
+            println!(
+                "Please install XQuartz and ensure it's running, then build with --features x11"
+            );
             std::process::exit(1);
         }
-        
+
         // Default error message for other platforms
         eprintln!("X11 support is required but not enabled. Please build with --features x11");
         std::process::exit(1);

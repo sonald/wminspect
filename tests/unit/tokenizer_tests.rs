@@ -1,4 +1,4 @@
-use wminspect::dsl::filter::{scan_tokens, Token, Op, Action};
+use wminspect::dsl::filter::{Action, Op, Token, scan_tokens};
 
 #[test]
 fn test_tokenizer_basic() {
@@ -60,7 +60,7 @@ fn test_tokenizer_actions() {
     let tokens = scan_tokens("name = test: pin; id = 123: filter");
     let mut found_pin = false;
     let mut found_filter = false;
-    
+
     for token in tokens {
         match token {
             Token::ACTION(Action::Pin) => found_pin = true,
@@ -68,7 +68,7 @@ fn test_tokenizer_actions() {
             _ => {}
         }
     }
-    
+
     assert!(found_pin);
     assert!(found_filter);
 }

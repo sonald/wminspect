@@ -1,10 +1,10 @@
-pub use tracing::{debug, error, info, trace, warn, event, Level, span, instrument};
-use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+pub use tracing::{Level, debug, error, event, info, instrument, span, trace, warn};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize tracing for the application
 pub fn init_tracing() {
     tracing_subscriber::registry()
-        .with(fmt::layer())
+        .with(fmt::layer().with_writer(std::io::stderr))
         .with(EnvFilter::from_default_env().add_directive("wminspect=debug".parse().unwrap()))
         .init();
 }

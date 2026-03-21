@@ -1,0 +1,4 @@
+clients: filter;
+attrs.map_state=Viewable: filter;
+geom.width>=400: filter;
+geom.height>=300: filter

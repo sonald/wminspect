@@ -4,31 +4,31 @@ use thiserror::Error;
 pub enum WmError {
     #[error("XCB connection error: {0}")]
     XcbConnection(String),
-    
+
     #[error("XCB query error: {0}")]
     XcbQuery(String),
-    
+
     #[error("XCB error: {0}")]
     XcbError(String),
-    
+
     #[error("Window not found: {0:#x}")]
     WindowNotFound(u32),
-    
+
     #[error("Invalid window attribute: {0}")]
     InvalidAttribute(String),
-    
+
     #[error("Filter parsing error: {0}")]
     FilterParsing(String),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("Serialization error: {0}")]
     Serialization(String),
-    
+
     #[error("Configuration error: {0}")]
     Configuration(String),
-    
+
     #[error("Runtime error: {0}")]
     Runtime(String),
 }
